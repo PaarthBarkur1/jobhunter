@@ -1,0 +1,10 @@
+mcp
+ollama
+beautifulsoup4
+requests
+duckduckgo-search
+pypdf
+playwright
+fastapi
+uvicorn
+openpyxl

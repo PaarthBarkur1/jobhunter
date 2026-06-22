@@ -1,0 +1,1524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Antigravity Job Hunter Dashboard</title>
+    <!-- Premium Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Markdown Parser -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <style>
+        :root {
+            --bg-gradient: linear-gradient(135deg, #0f0c20 0%, #15102a 50%, #06020f 100%);
+            --glass-bg: rgba(255, 255, 255, 0.03);
+            --glass-border: rgba(255, 255, 255, 0.06);
+            --glass-highlight: rgba(255, 255, 255, 0.1);
+            
+            --primary: #8b5cf6;
+            --primary-glow: rgba(139, 92, 246, 0.4);
+            --secondary: #ec4899;
+            --secondary-glow: rgba(236, 72, 153, 0.4);
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --text-dark: #6b7280;
+            
+            --font-family: 'Plus Jakarta Sans', sans-serif;
+            --transition-speed: 0.3s;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        body {
+            font-family: var(--font-family);
+            background: var(--bg-gradient);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* --- Scrollbar Customization --- */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--glass-border);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--primary);
+        }
+
+        /* --- Layout --- */
+        .app-container {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* --- Sidebar --- */
+        aside {
+            background: rgba(10, 8, 20, 0.6);
+            border-right: 1px solid var(--glass-border);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            overflow-y: auto;
+            backdrop-filter: blur(20px);
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-family: 'Outfit', sans-serif;
+            font-weight: 700;
+            font-size: 1.35rem;
+            letter-spacing: -0.5px;
+            background: linear-gradient(90deg, #a78bfa, #f472b6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .brand i {
+            font-size: 1.5rem;
+            color: var(--primary);
+            -webkit-text-fill-color: initial;
+            background: initial;
+        }
+
+        .section-label {
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--text-dark);
+            margin-bottom: 8px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        select {
+            width: 100%;
+            padding: 12px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            color: var(--text-main);
+            font-family: inherit;
+            font-size: 0.9rem;
+            outline: none;
+            cursor: pointer;
+            transition: all var(--transition-speed);
+        }
+
+        select:focus, input[type="text"]:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 10px var(--primary-glow);
+        }
+
+        .btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 12px 16px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all var(--transition-speed);
+            box-shadow: 0 4px 12px var(--primary-glow);
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px var(--primary-glow);
+            filter: brightness(1.1);
+        }
+
+        .btn:disabled {
+            background: var(--glass-border);
+            color: var(--text-muted);
+            box-shadow: none;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            color: var(--text-main);
+            box-shadow: none;
+        }
+
+        .btn-secondary:hover {
+            background: var(--glass-highlight);
+            box-shadow: none;
+        }
+
+        .status-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--text-dark);
+            box-shadow: 0 0 8px rgba(107, 114, 128, 0.4);
+        }
+
+        .status-dot.active {
+            background: var(--success);
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.5; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .preferences-viewer {
+            flex-grow: 1;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 16px;
+            font-size: 0.8rem;
+            overflow-y: auto;
+            line-height: 1.5;
+        }
+
+        .preferences-viewer h1, .preferences-viewer h2, .preferences-viewer h3 {
+            font-size: 0.95rem;
+            margin-bottom: 8px;
+            margin-top: 12px;
+            color: var(--primary);
+        }
+
+        .preferences-viewer ul {
+            padding-left: 14px;
+            margin-bottom: 8px;
+        }
+
+        /* --- Main Content Area --- */
+        main {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        header {
+            padding: 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--glass-border);
+            backdrop-filter: blur(10px);
+        }
+
+        .header-title h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .header-title p {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* --- Dashboard Trends --- */
+        .trends-container {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            padding: 24px;
+            background: rgba(0, 0, 0, 0.1);
+        }
+
+        .trend-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            backdrop-filter: blur(10px);
+            transition: transform var(--transition-speed);
+        }
+
+        .trend-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--glass-highlight);
+        }
+
+        .trend-info h3 {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+        }
+
+        .trend-info p {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.6rem;
+            font-weight: 700;
+            margin-top: 4px;
+        }
+
+        .trend-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            background: rgba(139, 92, 246, 0.1);
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+        }
+
+        .trend-card:nth-child(2) .trend-icon {
+            background: rgba(236, 72, 153, 0.1);
+            color: var(--secondary);
+        }
+        .trend-card:nth-child(3) .trend-icon {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+        }
+        .trend-card:nth-child(4) .trend-icon {
+            background: rgba(245, 158, 11, 0.1);
+            color: var(--warning);
+        }
+
+        /* --- Dual Pane Area --- */
+        .workspace-grid {
+            display: grid;
+            grid-template-columns: 1.25fr 1fr;
+            gap: 24px;
+            padding: 0 24px 24px 24px;
+            flex-grow: 1;
+            overflow: hidden;
+        }
+
+        .pane {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            backdrop-filter: blur(16px);
+        }
+
+        .pane-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--glass-border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .pane-header h2 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .pane-header h2 i {
+            color: var(--primary);
+        }
+
+        .pane-content {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        /* --- Job Cards --- */
+        .job-card {
+            background: rgba(255, 255, 255, 0.01);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            border-radius: 16px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            transition: all var(--transition-speed);
+        }
+
+        .job-card:hover {
+            border-color: rgba(139, 92, 246, 0.2);
+            background: rgba(255, 255, 255, 0.02);
+            transform: scale(1.01);
+        }
+
+        .job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        .job-title-group h3 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: white;
+        }
+
+        .job-title-group p {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .badges {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .badge {
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .badge-source {
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-main);
+        }
+
+        .badge-curve {
+            background: linear-gradient(90deg, #ec4899, #f59e0b);
+            color: white;
+            box-shadow: 0 2px 8px rgba(236, 72, 153, 0.4);
+            animation: pulse-border 2s infinite;
+        }
+
+        @keyframes pulse-border {
+            0% { box-shadow: 0 0 0 0 rgba(236, 72, 153, 0.4); }
+            70% { box-shadow: 0 0 0 4px rgba(236, 72, 153, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(236, 72, 153, 0); }
+        }
+
+        .job-meta-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .job-meta-row span i {
+            margin-right: 4px;
+            color: var(--primary);
+        }
+
+        .job-meta-row .ctc {
+            color: var(--success);
+            font-weight: 600;
+        }
+
+        .job-reasoning {
+            background: rgba(0, 0, 0, 0.2);
+            border-left: 2px solid var(--primary);
+            padding: 10px 12px;
+            border-radius: 0 8px 8px 0;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        .job-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 4px;
+        }
+
+        .match-score-bar-container {
+            width: 120px;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.05);
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+        }
+
+        .match-score-bar {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            border-radius: 3px;
+        }
+
+        .match-percentage {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-main);
+            margin-left: 8px;
+        }
+
+        .job-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .action-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all var(--transition-speed);
+        }
+
+        .action-icon:hover {
+            background: var(--glass-highlight);
+            color: var(--text-main);
+            transform: scale(1.05);
+        }
+
+        .action-icon.rated-up {
+            background: rgba(16, 185, 129, 0.2);
+            border-color: var(--success);
+            color: var(--success);
+        }
+
+        .action-icon.rated-down {
+            background: rgba(239, 68, 68, 0.2);
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+
+        /* --- Markdown Pane (Summary) --- */
+        .markdown-body {
+            line-height: 1.6;
+            font-size: 0.9rem;
+            color: var(--text-main);
+        }
+
+        .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+            font-family: 'Outfit', sans-serif;
+            margin-top: 18px;
+            margin-bottom: 8px;
+            color: white;
+        }
+
+        .markdown-body h1 { font-size: 1.4rem; border-bottom: 1px solid var(--glass-border); padding-bottom: 6px; }
+        .markdown-body h2 { font-size: 1.15rem; }
+        .markdown-body h3 { font-size: 1rem; }
+
+        .markdown-body p { margin-bottom: 12px; color: var(--text-muted); }
+        .markdown-body ul { padding-left: 20px; margin-bottom: 12px; color: var(--text-muted); }
+        .markdown-body li { margin-bottom: 4px; }
+        .markdown-body blockquote {
+            background: rgba(139, 92, 246, 0.05);
+            border-left: 3px solid var(--primary);
+            padding: 8px 16px;
+            margin: 12px 0;
+            border-radius: 0 8px 8px 0;
+        }
+
+        /* --- Modal Dialog --- */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(10px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+            z-index: 1000;
+        }
+
+        .modal-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .modal {
+            background: #110d24;
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+            border-radius: 24px;
+            width: 480px;
+            max-width: 90%;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            transform: scale(0.9);
+            transition: transform 0.3s;
+        }
+
+        .modal-overlay.active .modal {
+            transform: scale(1);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+
+        .modal-close {
+            cursor: pointer;
+            color: var(--text-muted);
+            font-size: 1.1rem;
+        }
+
+        .modal-close:hover {
+            color: white;
+        }
+
+        .modal textarea {
+            width: 100%;
+            height: 120px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            color: var(--text-main);
+            padding: 12px;
+            font-family: inherit;
+            font-size: 0.9rem;
+            outline: none;
+            resize: none;
+            transition: border-color var(--transition-speed);
+        }
+
+        .modal textarea:focus {
+            border-color: var(--danger);
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+        }
+
+        /* --- Empty State --- */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 20px;
+            text-align: center;
+            color: var(--text-muted);
+            gap: 12px;
+            height: 100%;
+        }
+
+        .empty-state i {
+            font-size: 2.5rem;
+            color: var(--text-dark);
+        }
+
+        .empty-state p {
+            font-size: 0.9rem;
+        }
+
+        /* --- Custom Toggle switch --- */
+        .switch input:checked + .slider {
+            background-color: var(--primary);
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        .switch input:checked + .slider:before {
+            transform: translateX(22px);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="app-container">
+        
+        <!-- Sidebar controls -->
+        <aside>
+            <div class="brand">
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+                <span>Antigravity Scout</span>
+            </div>
+            
+            <hr style="border: 0; border-top: 1px solid var(--glass-border);">
+            
+            <div class="control-group">
+                <span class="section-label">Select Date</span>
+                <select id="date-select" onchange="loadDateData(this.value)">
+                    <option value="">Loading...</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <span class="section-label">Pipeline Control</span>
+                <div style="display: flex; gap: 8px; width: 100%;">
+                    <button class="btn" id="scan-btn" onclick="triggerScan()" style="flex-grow: 1;">
+                        <i class="fa-solid fa-play"></i> Scan
+                    </button>
+                    <button class="btn" id="kill-btn" onclick="killScan()" style="background: var(--danger); box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4); display: none; padding: 12px 16px;">
+                        <i class="fa-solid fa-stop"></i> Stop
+                    </button>
+                </div>
+            </div>
+
+            <div class="control-group" style="flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; background: var(--glass-bg); padding: 12px; border: 1px solid var(--glass-border); border-radius: 12px;">
+                <span class="section-label" style="margin-bottom: 0;">Restrict to Targets</span>
+                <label class="switch" style="position: relative; display: inline-block; width: 44px; height: 22px;">
+                    <input type="checkbox" id="restrict-toggle" onchange="toggleRestrict(this.checked)" style="opacity: 0; width: 0; height: 0;">
+                    <span class="slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--glass-border); transition: .4s; border-radius: 22px;"></span>
+                </label>
+            </div>
+
+            <div class="status-card">
+                <div class="status-dot" id="status-dot"></div>
+                <div style="display: flex; flex-direction: column; gap: 2px;">
+                    <span style="font-size: 0.8rem; font-weight: 600;" id="status-text">System Idle</span>
+                    <span style="font-size: 0.7rem; color: var(--text-muted);" id="status-subtext">Click above to search</span>
+                </div>
+            </div>
+
+            <div class="control-group" style="margin-top: 8px;">
+                <span class="section-label">Target Companies</span>
+                <div style="display: flex; flex-direction: column; gap: 6px; background: var(--glass-bg); padding: 8px; border: 1px solid var(--glass-border); border-radius: 10px;">
+                    <input type="text" id="new-company-input" placeholder="Company Name (e.g. eBay)" style="width: 100%; padding: 8px 10px; background: rgba(0, 0, 0, 0.2); border: 1px solid var(--glass-border); border-radius: 6px; color: var(--text-main); font-size: 0.8rem; outline: none; transition: border-color var(--transition-speed);">
+                    <input type="text" id="new-company-url-input" placeholder="Careers URL (Optional, e.g. https://jobs.ebayinc.com/)" style="width: 100%; padding: 8px 10px; background: rgba(0, 0, 0, 0.2); border: 1px solid var(--glass-border); border-radius: 6px; color: var(--text-main); font-size: 0.8rem; outline: none; transition: border-color var(--transition-speed);">
+                    <button class="btn" style="width: 100%; padding: 8px; border-radius: 6px; font-size: 0.8rem; box-shadow: none;" onclick="addTargetCompany()"><i class="fa-solid fa-plus"></i> Add Company</button>
+                </div>
+                <div id="companies-container" style="display: flex; flex-wrap: wrap; gap: 6px; max-height: 100px; overflow-y: auto; padding: 4px 0; margin-top: 4px;">
+                    <!-- Tags will load dynamically -->
+                </div>
+            </div>
+
+            <div class="control-group" style="margin-top: 8px;">
+                <span class="section-label">Target Roles / Queries</span>
+                <div style="display: flex; gap: 6px;">
+                    <input type="text" id="new-query-input" placeholder="e.g. quant developer" style="flex-grow: 1; padding: 10px 12px; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 8px; color: var(--text-main); font-size: 0.8rem; outline: none; transition: border-color var(--transition-speed);">
+                    <button class="btn" style="padding: 10px 12px; border-radius: 8px; font-size: 0.8rem; box-shadow: none;" onclick="addTargetQuery()"><i class="fa-solid fa-plus"></i></button>
+                </div>
+                <div id="queries-container" style="display: flex; flex-wrap: wrap; gap: 6px; max-height: 100px; overflow-y: auto; padding: 4px 0;">
+                    <!-- Tags will load dynamically -->
+                </div>
+            </div>
+
+            <div style="display: flex; flex-direction: column; flex-grow: 1; min-height: 200px;">
+                <span class="section-label">Learned Preferences</span>
+                <div class="preferences-viewer" id="preferences-box">
+                    Loading profile...
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Dashboard Dashboard Content -->
+        <main>
+            <header>
+                <div class="header-title">
+                    <h1 id="selected-date-title">Job Hunting Digest</h1>
+                    <p>Scouring local resumes, Google, Bing & Reddit, gated at >35 LPA</p>
+                </div>
+                <div>
+                    <button class="btn btn-secondary" onclick="loadTrends()">
+                        <i class="fa-solid fa-chart-line"></i> Refresh Trends
+                    </button>
+                </div>
+            </header>
+
+            <!-- Metrics Dashboard row -->
+            <div class="trends-container">
+                <div class="trend-card">
+                    <div class="trend-info">
+                        <h3>Scanned Jobs</h3>
+                        <p id="metric-scanned">0</p>
+                    </div>
+                    <div class="trend-icon"><i class="fa-solid fa-database"></i></div>
+                </div>
+                <div class="trend-card">
+                    <div class="trend-info">
+                        <h3>Strong Matches</h3>
+                        <p id="metric-matches">0</p>
+                    </div>
+                    <div class="trend-icon"><i class="fa-solid fa-circle-check"></i></div>
+                </div>
+                <div class="trend-card">
+                    <div class="trend-info">
+                        <h3>Curve Balls</h3>
+                        <p id="metric-curve">0</p>
+                    </div>
+                    <div class="trend-icon"><i class="fa-solid fa-shuffle"></i></div>
+                </div>
+                <div class="trend-card">
+                    <div class="trend-info">
+                        <h3>Top Hiring Co</h3>
+                        <p id="metric-company" style="font-size: 0.95rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; margin-top: 10px;">N/A</p>
+                    </div>
+                    <div class="trend-icon"><i class="fa-solid fa-building"></i></div>
+                </div>
+            </div>
+
+            <!-- Double pane workspace grids -->
+            <div class="workspace-grid">
+                
+                <!-- Left Pane: Job List Feed -->
+                <div class="pane">
+                    <div class="pane-header">
+                        <h2><i class="fa-solid fa-briefcase"></i> Discovered Job Feed</h2>
+                        <span style="font-size: 0.8rem; color: var(--text-muted);" id="job-count-label">0 jobs found</span>
+                    </div>
+                    <div class="pane-content" id="job-list-content">
+                        <div class="empty-state">
+                            <i class="fa-solid fa-hourglass-empty"></i>
+                            <p>No dated folder selected. Run a scan or select a date in the sidebar.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Pane: Daily Digest Summary -->
+                <div class="pane">
+                    <div class="pane-header">
+                        <h2><i class="fa-solid fa-clipboard-list"></i> Daily AI Digest Report</h2>
+                    </div>
+                    <div class="pane-content markdown-body" id="digest-summary-content">
+                        <div class="empty-state">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i>
+                            <p>Select a date to view the daily Markdown summary compiled by Ollama.</p>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+        </main>
+
+    </div>
+
+    <!-- Unified Modal for rating feedback comment -->
+    <div class="modal-overlay" id="feedback-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="modal-title">Submit Feedback</h3>
+                <i class="fa-solid fa-xmark modal-close" onclick="closeFeedbackModal()"></i>
+            </div>
+            <p style="font-size: 0.85rem; color: var(--text-muted);" id="modal-description">
+                Explain why you liked or disliked this job to update your preference profile.
+            </p>
+            <textarea id="feedback-comment" placeholder="Provide your reasoning..."></textarea>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeFeedbackModal()">Cancel</button>
+                <button class="btn" id="submit-feedback-btn" style="background: var(--primary); box-shadow: 0 4px 12px var(--primary-glow);" onclick="submitFeedback()">
+                    Save Preference
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let activeJobFeedback = null; // { date, job_id, status }
+        let scanPollInterval = null;
+        let targetCompanies = [];
+        let targetQueries = [];
+        let currentScanningCompany = "";
+        let completedScanningCompanies = [];
+
+        // Fetch and load dates on launch
+        window.addEventListener("DOMContentLoaded", () => {
+            loadDates();
+            loadTrends();
+            checkScanStatus();
+            loadCompanies();
+            loadQueries();
+            loadConfigSettings();
+        });
+
+        // Get config settings (restrict toggle state)
+        async function loadConfigSettings() {
+            try {
+                const res = await fetch("/api/config");
+                const config = await res.json();
+                document.getElementById("restrict-toggle").checked = config.restrict_to_target_companies || false;
+            } catch (err) {
+                console.error("Failed to load config: ", err);
+            }
+        }
+
+        // Toggle target restriction state
+        async function toggleRestrict(checked) {
+            try {
+                await fetch("/api/config/toggle-restrict", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ restrict: checked })
+                });
+            } catch (err) {
+                console.error("Failed to save toggle state: ", err);
+            }
+        }
+
+        // Get dates list
+        async function loadDates() {
+            try {
+                const res = await fetch("/api/dates");
+                const dates = await res.json();
+                const select = document.getElementById("date-select");
+                
+                if (dates.length === 0) {
+                    select.innerHTML = '<option value="">No data folders found</option>';
+                    return;
+                }
+                
+                const prevVal = select.value;
+                select.innerHTML = "";
+                
+                // Add the "All Dates" option at the very beginning
+                const allOpt = document.createElement("option");
+                allOpt.value = "all";
+                allOpt.textContent = "All Dates (Combined)";
+                select.appendChild(allOpt);
+                
+                dates.forEach(d => {
+                    const opt = document.createElement("option");
+                    opt.value = d;
+                    opt.textContent = d;
+                    select.appendChild(opt);
+                });
+                
+                if (prevVal && (dates.includes(prevVal) || prevVal === "all")) {
+                    select.value = prevVal;
+                } else {
+                    // Default to showing the latest day's specific results
+                    select.value = dates[0];
+                    loadDateData(dates[0]);
+                }
+            } catch (err) {
+                console.error("Failed to load dates: ", err);
+            }
+        }
+
+        // Fetch dates details
+        async function loadDateData(date) {
+            if (!date) return;
+            document.getElementById("selected-date-title").textContent = `Job Hunting Digest - ${date}`;
+            
+            try {
+                const res = await fetch(`/api/jobs?date=${date}`);
+                const data = await res.json();
+                
+                // 1. Render Preferences Sidebar
+                const prefBox = document.getElementById("preferences-box");
+                prefBox.innerHTML = marked.parse(data.preferences || "");
+                
+                // 2. Render Markdown Summary
+                const summaryBox = document.getElementById("digest-summary-content");
+                if (data.summary) {
+                    summaryBox.innerHTML = marked.parse(data.summary);
+                } else {
+                    summaryBox.innerHTML = '<div class="empty-state"><p>No digest report generated for today.</p></div>';
+                }
+                
+                // 3. Render Jobs Feed list
+                renderJobsList(data.jobs, date);
+            } catch (err) {
+                console.error("Failed to fetch jobs list: ", err);
+            }
+        }
+
+        // Render jobs feed to left column
+        function renderJobsList(jobs, date) {
+            const container = document.getElementById("job-list-content");
+            const countLabel = document.getElementById("job-count-label");
+            
+            countLabel.textContent = `${jobs.length} jobs found`;
+            
+            if (jobs.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <i class="fa-solid fa-triangle-exclamation"></i>
+                        <p>No job postings passed the salary gate or match evaluations today.</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Sort by match score descending
+            jobs.sort((a, b) => (b.match_score || 0) - (a.match_score || 0));
+            
+            container.innerHTML = "";
+            jobs.forEach(job => {
+                const card = document.createElement("div");
+                card.className = "job-card";
+                
+                // Determine score bar color based on percentage
+                let colorClass = "var(--primary)";
+                if (job.match_score >= 85) colorClass = "var(--success)";
+                else if (job.match_score < 70) colorClass = "var(--warning)";
+                
+                const badgesHtml = `
+                    <div class="badges">
+                        <span class="badge badge-source">${job.source}</span>
+                        ${job.found_date ? `<span class="badge badge-date" style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa; padding: 4px 8px; border-radius: 6px; font-size: 0.75rem;"><i class="fa-regular fa-calendar"></i> ${job.found_date}</span>` : ''}
+                        ${job.is_curve_ball ? '<span class="badge badge-curve"><i class="fa-solid fa-fire"></i> Curve Ball</span>' : ''}
+                    </div>
+                `;
+                
+                card.innerHTML = `
+                    <div class="job-header">
+                        <div class="job-title-group">
+                            <h3>${job.title}</h3>
+                            <p>${job.company}</p>
+                        </div>
+                        ${badgesHtml}
+                    </div>
+                    
+                    <div class="job-meta-row">
+                        <span class="ctc"><i class="fa-solid fa-sack-dollar"></i> ~${job.ctc} LPA</span>
+                        <span><i class="fa-solid fa-graduation-cap"></i> ${job.experience_level}</span>
+                        ${job.location && job.location !== 'N/A' ? `<span><i class="fa-solid fa-location-dot"></i> ${job.location}</span>` : ''}
+                    </div>
+                    
+                    <div class="job-reasoning">
+                        <strong>Evaluation:</strong> ${job.match_reason}
+                        ${job.is_curve_ball && job.curve_ball_reason ? `<br><strong style="color:var(--secondary)">Why Curve Ball:</strong> ${job.curve_ball_reason}` : ''}
+                    </div>
+                    
+                    <div class="job-footer">
+                        <div style="display: flex; align-items: center;">
+                            <div class="match-score-bar-container">
+                                <div class="match-score-bar" style="width: ${job.match_score}%; background: ${colorClass};"></div>
+                            </div>
+                            <span class="match-percentage">${job.match_score}%</span>
+                        </div>
+                        
+                        <div class="job-actions">
+                            <a href="${job.url}" target="_blank" class="action-icon" title="Open Job Posting"><i class="fa-solid fa-arrow-up-right-from-square"></i></a>
+                            <button class="action-icon ${job.status === 'thumbs_up' ? 'rated-up' : ''}" onclick="openFeedbackModal('${date}', '${job.id}', 'thumbs_up')" title="Thumbs Up (Add to likes)"><i class="fa-solid fa-thumbs-up"></i></button>
+                            <button class="action-icon ${job.status === 'thumbs_down' ? 'rated-down' : ''}" onclick="openFeedbackModal('${date}', '${job.id}', 'thumbs_down')" title="Thumbs Down (Reject & specify why)"><i class="fa-solid fa-thumbs-down"></i></button>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        // Fetch aggregated trends
+        async function loadTrends() {
+            try {
+                const res = await fetch("/api/trends");
+                const trends = await res.json();
+                
+                document.getElementById("metric-scanned").textContent = trends.total_jobs_scanned || 0;
+                document.getElementById("metric-matches").textContent = trends.strong_matches || 0;
+                document.getElementById("metric-curve").textContent = trends.curve_balls || 0;
+                
+                const topCompany = trends.top_companies.length > 0 ? trends.top_companies[0].company : "N/A";
+                document.getElementById("metric-company").textContent = topCompany;
+                document.getElementById("metric-company").title = topCompany;
+            } catch (err) {
+                console.error("Failed to load trends: ", err);
+            }
+        }
+
+        // Trigger Scan Execution
+        async function triggerScan() {
+            const btn = document.getElementById("scan-btn");
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Scan Starting...';
+            
+            try {
+                const res = await fetch("/api/scan", { method: "POST" });
+                const data = await res.json();
+                
+                if (data.status === "started" || data.status === "running") {
+                    updateStatus(true, "Scanning...", "Agent is searching target portals");
+                    pollScanStatus();
+                } else {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fa-solid fa-play"></i> Scan';
+                }
+            } catch (err) {
+                console.error("Failed to start scan: ", err);
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fa-solid fa-play"></i> Scan';
+            }
+        }
+
+        // Kill Scan Execution
+        async function killScan() {
+            const btn = document.getElementById("kill-btn");
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Stopping...';
+            
+            try {
+                const res = await fetch("/api/scan/kill", { method: "POST" });
+                const data = await res.json();
+                
+                if (data.status === "killed" || data.status === "idle") {
+                    updateStatus(false, "System Idle", "Scan stopped by user");
+                    clearInterval(scanPollInterval);
+                    
+                    const scanBtn = document.getElementById("scan-btn");
+                    scanBtn.disabled = false;
+                    scanBtn.innerHTML = '<i class="fa-solid fa-play"></i> Scan';
+                    
+                    btn.style.display = "none";
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fa-solid fa-stop"></i> Stop';
+                    
+                    // Reload data
+                    await loadDates();
+                    loadTrends();
+                }
+            } catch (err) {
+                console.error("Failed to stop scan: ", err);
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fa-solid fa-stop"></i> Stop';
+            }
+        }
+
+        // Check background processes
+        async function checkScanStatus() {
+            try {
+                const res = await fetch("/api/scan/status");
+                const data = await res.json();
+                
+                currentScanningCompany = data.current_company || "";
+                completedScanningCompanies = data.completed_companies || [];
+                renderCompanies();
+
+                if (data.status === "running") {
+                    updateStatus(true, "Scanning...", "Agent is searching target portals");
+                    pollScanStatus();
+                } else {
+                    updateStatus(false, "System Idle", "Click above to search");
+                    document.getElementById("kill-btn").style.display = "none";
+                }
+            } catch (err) {
+                console.error("Failed to fetch scan status: ", err);
+            }
+        }
+
+        function pollScanStatus() {
+            if (scanPollInterval) clearInterval(scanPollInterval);
+            
+            document.getElementById("scan-btn").disabled = true;
+            document.getElementById("scan-btn").innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Scan Active...';
+            document.getElementById("kill-btn").style.display = "block";
+            
+            scanPollInterval = setInterval(async () => {
+                try {
+                    const res = await fetch("/api/scan/status");
+                    const data = await res.json();
+                    
+                    currentScanningCompany = data.current_company || "";
+                    completedScanningCompanies = data.completed_companies || [];
+                    renderCompanies();
+                    
+                    // Load files in real-time on every poll!
+                    const select = document.getElementById("date-select");
+                    const activeDate = select.value;
+                    if (activeDate) {
+                        loadDateData(activeDate);
+                    }
+                    
+                    if (data.status !== "running") {
+                        clearInterval(scanPollInterval);
+                        updateStatus(false, "System Idle", "Search scan finished");
+                        
+                        const btn = document.getElementById("scan-btn");
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="fa-solid fa-play"></i> Scan';
+                        
+                        document.getElementById("kill-btn").style.display = "none";
+                        
+                        // Reset scanning progress on complete
+                        currentScanningCompany = "";
+                        completedScanningCompanies = [];
+                        renderCompanies();
+                        
+                        // Full refresh
+                        await loadDates();
+                        loadTrends();
+                    }
+                } catch (err) {
+                    console.error("Failed while polling scan: ", err);
+                }
+            }, 3000);
+        }
+
+        function updateStatus(active, text, subtext) {
+            const dot = document.getElementById("status-dot");
+            const textEl = document.getElementById("status-text");
+            const subtextEl = document.getElementById("status-subtext");
+            
+            if (active) {
+                dot.classList.add("active");
+            } else {
+                dot.classList.remove("active");
+            }
+            textEl.textContent = text;
+            subtextEl.textContent = subtext;
+        }
+
+        // Thumbs Up / Down rating API
+        async function rateJob(date, jobId, status, comment = "") {
+            try {
+                const res = await fetch("/api/feedback", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ date, job_id: jobId, status, comment })
+                });
+                const data = await res.json();
+                if (data.status === "success") {
+                    loadDateData(date);
+                    showPreferencesUpdatedNotice();
+                    // Reload companies in case a new one was added to configuration
+                    loadCompanies();
+                }
+            } catch (err) {
+                console.error("Failed to rate job: ", err);
+            }
+        }
+
+        // Open unified feedback modal
+        function openFeedbackModal(date, jobId, status) {
+            activeJobFeedback = { date, job_id: jobId, status };
+            
+            const titleEl = document.getElementById("modal-title");
+            const descEl = document.getElementById("modal-description");
+            const btnEl = document.getElementById("submit-feedback-btn");
+            const commentEl = document.getElementById("feedback-comment");
+            commentEl.value = "";
+            
+            if (status === "thumbs_up") {
+                titleEl.textContent = "Submit Like Feedback";
+                descEl.textContent = "What did you like about this job? Ollama will refine your preference profile to find more matches like this.";
+                commentEl.placeholder = "e.g. Quantitative focus, great remote policies, high salary package...";
+                btnEl.style.background = "var(--success)";
+                btnEl.style.boxShadow = "0 4px 12px rgba(16, 185, 129, 0.4)";
+                btnEl.textContent = "Save Preference";
+            } else {
+                titleEl.textContent = "Submit Dislike Feedback";
+                descEl.textContent = "What did you not like about this job? Ollama will update your profile to avoid similar postings.";
+                commentEl.placeholder = "e.g. Requires onsite presence, low CTC, irrelevant domain stack...";
+                btnEl.style.background = "var(--danger)";
+                btnEl.style.boxShadow = "0 4px 12px rgba(239, 68, 68, 0.4)";
+                btnEl.textContent = "Save Preference";
+            }
+            
+            document.getElementById("feedback-modal").classList.add("active");
+        }
+
+        function closeFeedbackModal() {
+            document.getElementById("feedback-modal").classList.remove("active");
+            activeJobFeedback = null;
+        }
+
+        // Submit unified feedback
+        async function submitFeedback() {
+            if (!activeJobFeedback) return;
+            const comment = document.getElementById("feedback-comment").value.trim();
+            
+            if (!comment) {
+                alert("Please add a reason for your feedback.");
+                return;
+            }
+            
+            const btn = document.getElementById("submit-feedback-btn");
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+            
+            await rateJob(activeJobFeedback.date, activeJobFeedback.job_id, activeJobFeedback.status, comment);
+            
+            btn.disabled = false;
+            btn.innerHTML = "Save Preference";
+            closeFeedbackModal();
+        }
+
+        function showPreferencesUpdatedNotice() {
+            const prefViewer = document.getElementById("preferences-box");
+            prefViewer.style.border = "1px solid var(--success)";
+            setTimeout(() => {
+                prefViewer.style.border = "1px solid var(--glass-border)";
+            }, 1000);
+        }
+
+        // --- Target Companies JS API ---
+        async function loadCompanies() {
+            try {
+                const res = await fetch("/api/companies");
+                targetCompanies = await res.json();
+                renderCompanies();
+            } catch (err) {
+                console.error("Failed to load target companies: ", err);
+            }
+        }
+
+        function renderCompanies() {
+            const container = document.getElementById("companies-container");
+            if (targetCompanies.length === 0) {
+                container.innerHTML = '<span style="font-size:0.75rem; color:var(--text-dark); font-style:italic;">No companies added yet</span>';
+                return;
+            }
+            container.innerHTML = "";
+            
+            const normCurrent = currentScanningCompany ? currentScanningCompany.toLowerCase().trim() : "";
+            const normCompleted = (completedScanningCompanies || []).map(c => c.toLowerCase().trim());
+
+            targetCompanies.forEach(company => {
+                const normCo = company.toLowerCase().trim();
+                const tag = document.createElement("span");
+                tag.className = "badge";
+                
+                if (normCo === normCurrent) {
+                    // Active scanning: Yellow/Amber styling
+                    tag.style.background = "rgba(245, 158, 11, 0.25)";
+                    tag.style.border = "1px solid rgba(245, 158, 11, 0.5)";
+                    tag.style.color = "#fbbf24";
+                } else if (normCompleted.includes(normCo)) {
+                    // Completed: Green/Emerald styling
+                    tag.style.background = "rgba(16, 185, 129, 0.2)";
+                    tag.style.border = "1px solid rgba(16, 185, 129, 0.5)";
+                    tag.style.color = "#34d399";
+                } else {
+                    // Idle/Not Started: Default purple styling
+                    tag.style.background = "rgba(139, 92, 246, 0.15)";
+                    tag.style.border = "1px solid rgba(139, 92, 246, 0.3)";
+                    tag.style.color = "#c084fc";
+                }
+                
+                tag.style.display = "flex";
+                tag.style.alignItems = "center";
+                tag.style.gap = "6px";
+                tag.style.padding = "4px 8px";
+                tag.style.borderRadius = "6px";
+                tag.style.fontSize = "0.75rem";
+                tag.style.textTransform = "none";
+                tag.innerHTML = `
+                    ${company}
+                    <i class="fa-solid fa-xmark" style="cursor:pointer; font-size:0.7rem; opacity:0.8; transition:opacity 0.2s;" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.8" onclick="removeTargetCompany('${company.replace(/'/g, "\\'")}')"></i>
+                `;
+                container.appendChild(tag);
+            });
+        }
+
+        async function addTargetCompany() {
+            const input = document.getElementById("new-company-input");
+            const urlInput = document.getElementById("new-company-url-input");
+            const name = input.value.trim();
+            const url = urlInput ? urlInput.value.trim() : "";
+            if (!name) return;
+            
+            // Check if already in targetCompanies
+            const exists = targetCompanies.some(c => c.toLowerCase().trim() === name.toLowerCase().trim());
+            
+            if (url) {
+                try {
+                    const res = await fetch("/api/career-pages", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ company: name, url: url })
+                    });
+                    const data = await res.json();
+                    if (data.status === "success") {
+                        if (!exists) {
+                            targetCompanies.push(name);
+                        }
+                        urlInput.value = "";
+                        input.value = "";
+                        await loadCompanies();
+                        alert(`Successfully mapped and added ${name}!`);
+                    } else {
+                        alert(`Failed to save career page mapping: ${data.detail || 'unknown error'}`);
+                    }
+                } catch (err) {
+                    console.error("Error saving career page mapping: ", err);
+                    alert("Error saving career page URL.");
+                }
+            } else {
+                if (exists) {
+                    alert("Company already added.");
+                    return;
+                }
+                targetCompanies.push(name);
+                input.value = "";
+                await saveCompanies();
+            }
+        }
+
+        async function removeTargetCompany(name) {
+            targetCompanies = targetCompanies.filter(c => c !== name);
+            await saveCompanies();
+        }
+
+        async function saveCompanies() {
+            try {
+                const res = await fetch("/api/companies", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ companies: targetCompanies })
+                });
+                const data = await res.json();
+                if (data.status === "success") {
+                    renderCompanies();
+                }
+            } catch (err) {
+                console.error("Failed to save target companies: ", err);
+            }
+        }
+
+        // --- Target Search Queries / Roles JS API ---
+        async function loadQueries() {
+            try {
+                const res = await fetch("/api/queries");
+                targetQueries = await res.json();
+                renderQueries();
+            } catch (err) {
+                console.error("Failed to load search queries: ", err);
+            }
+        }
+
+        function renderQueries() {
+            const container = document.getElementById("queries-container");
+            if (targetQueries.length === 0) {
+                container.innerHTML = '<span style="font-size:0.75rem; color:var(--text-dark); font-style:italic;">No search queries added yet</span>';
+                return;
+            }
+            container.innerHTML = "";
+            targetQueries.forEach(query => {
+                const tag = document.createElement("span");
+                tag.className = "badge";
+                tag.style.background = "rgba(236, 72, 153, 0.15)";
+                tag.style.border = "1px solid rgba(236, 72, 153, 0.3)";
+                tag.style.color = "#f472b6";
+                tag.style.display = "flex";
+                tag.style.alignItems = "center";
+                tag.style.gap = "6px";
+                tag.style.padding = "4px 8px";
+                tag.style.borderRadius = "6px";
+                tag.style.fontSize = "0.75rem";
+                tag.style.textTransform = "none";
+                
+                // Truncate query text if it is very long (e.g. site queries) to fit sidebar nicely
+                let displayQuery = query;
+                if (displayQuery.length > 25) {
+                    displayQuery = displayQuery.substring(0, 22) + "...";
+                }
+                
+                tag.innerHTML = `
+                    ${displayQuery}
+                    <i class="fa-solid fa-xmark" style="cursor:pointer; font-size:0.7rem; opacity:0.8; transition:opacity 0.2s;" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.8" onclick="removeTargetQuery('${query.replace(/'/g, "\\'")}')" title="${query}"></i>
+                `;
+                container.appendChild(tag);
+            });
+        }
+
+        async function addTargetQuery() {
+            const input = document.getElementById("new-query-input");
+            const val = input.value.trim();
+            if (!val) return;
+            
+            if (targetQueries.includes(val)) {
+                alert("Query/Role already added.");
+                return;
+            }
+            
+            targetQueries.push(val);
+            input.value = "";
+            await saveQueries();
+        }
+
+        async function removeTargetQuery(val) {
+            targetQueries = targetQueries.filter(q => q !== val);
+            await saveQueries();
+        }
+
+        async function saveQueries() {
+            try {
+                const res = await fetch("/api/queries", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ queries: targetQueries })
+                });
+                const data = await res.json();
+                if (data.status === "success") {
+                    renderQueries();
+                }
+            } catch (err) {
+                console.error("Failed to save search queries: ", err);
+            }
+        }
+    </script>
+</body>
+</html>
