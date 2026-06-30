@@ -8,3 +8,5 @@ playwright
 fastapi
 uvicorn
 openpyxl
+sqlalchemy
+aiosqlite
