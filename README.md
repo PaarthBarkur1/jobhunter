@@ -24,13 +24,14 @@ Welcome to the **Job Hunter Agent & Dashboard**, a semi-automated job search ass
 
 ## 📂 Architecture Overview
 
-* **`app.py`**: The FastAPI backend server. Serves the static dashboard, provides JSON REST endpoints, and manages background subprocesses for scans and scheduling.
-* **`job_agent.py`**: The orchestrator of the job hunting process. Starts the MCP client, triggers searches, retrieves resumes, calls Ollama to extract and score roles, gates them by salary threshold, and compiles the daily reports.
-* **`mcp_server.py`**: The FastMCP server containing core tools (`search_web`, `fetch_web_page`, `scrape_company_career_page`, `read_resumes`) called by the agent.
-* **`scheduler.py`**: A periodic scanner script that runs `job_agent.py` at a configurable interval (e.g., every 12 hours) to auto-check career boards.
-* **`career_scraper.py` & `career_pages.py`**: Houses the selectors, navigation workflows, and instructions for scraping specific company portals.
+* **`core/models.py` & `core/database.py`**: Defines the SQLite database schema (JobPosting, Company, ScanLog) and async SQLAlchemy engine for robust state management.
+* **`workers/orchestrator.py`**: The central async DAG workflow coordinator. Replaces the old monolithic `job_agent.py`. It delegates discovery, extraction, and evaluation across specialized services.
+* **`services/scraper_service.py`**: Handles Playwright initialization and extracts jobs via API interception or fallback DOM parsing (no LLMs used for DOM parsing).
+* **`services/llm_service.py`**: Async wrapper for the local LLM (Ollama), featuring a strict concurrency-1 queue to prevent VRAM OOM errors and enforcing JSON schema output.
+* **`services/evaluator_service.py`**: Accepts job descriptions and candidate resumes to generate semantic match scores and extract required skills via the LLM service.
+* **`app.py`**: The FastAPI backend server serving the static dashboard and REST endpoints.
 * **`templates/index.html`**: The frontend UI for the web dashboard.
-* **`config.json`**: App configuration containing your target compensation threshold, currency, target location, search queries, target companies, and portal registry.
+* **`config.json`**: App configuration containing your target compensation threshold, currency, target location, etc.
 
 ---
 

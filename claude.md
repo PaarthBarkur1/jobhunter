@@ -75,3 +75,8 @@ Troubleshooting
 - Configured `.gitignore` to prevent tracking daily job output runs (e.g. `data/YYYY-MM-DD/`), local screenshots (`uber_screenshot.png`), temporary/test files (`test_uber.py`, `uber_test.html`), and `.scratch/` directories.
 - Retained tracking of the master database configuration (`data/companies_db.json`) while ignoring the rest of the dynamic files under `data/`.
 
+## July 2026 Refactoring Updates (SQLite & Decoupled Services)
+- **State Management**: Replaced JSON state management (`data/all_jobs.json`, `data/YYYY-MM-DD/`) with a robust SQLite database (`data/jobs.db`). Models are defined in `core/models.py` (JobPosting, Company, ScanLog) using async SQLAlchemy.
+- **Architecture**: Transitioned from the monolithic `job_agent.py` and `mcp_server.py` to a decoupled, modular architecture with specialized services: `services/scraper_service.py`, `services/llm_service.py`, and `services/evaluator_service.py`.
+- **Concurrency Isolation**: I/O tasks use Semaphores for concurrent web fetching while LLM tasks are strictly queued with concurrency limit 1 in `llm_service.py` to prevent VRAM OOM errors.
+- **Orchestration**: The pipeline is now managed via an async DAG workflow in `workers/orchestrator.py` which delegates to the services (Discovery -> Deduplication -> Extraction/Evaluation -> Persistence).
