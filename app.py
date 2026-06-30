@@ -7,6 +7,12 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 from typing import List
+from sqlalchemy import select, desc, func
+from sqlalchemy.orm import selectinload
+
+from core.database import get_db_session
+from core.models import JobPosting, Company, ScanLog
+from workers.orchestrator import run_pipeline
 
 # Import preference update from job_agent
 from job_agent import update_preferences_profile
@@ -18,7 +24,7 @@ logger = logging.getLogger("job_hunter_web")
 app = FastAPI(title="Job Hunter Dashboard API")
 
 # Global tracking for background scan process
-scan_process = None
+scan_task = None
 scheduler_process = None
 ollama_process = None
 scan_lock = asyncio.Lock()
@@ -187,57 +193,55 @@ async def get_dashboard():
 
 @app.get("/api/dates")
 async def get_available_dates():
-    """Retrieve all daily dates directories."""
-    data_dir = "data"
-    dates = []
-    if os.path.exists(data_dir):
-        for item in os.listdir(data_dir):
-            if os.path.isdir(os.path.join(data_dir, item)):
-                # Ensure it fits YYYY-MM-DD
-                if len(item) == 10 and item[4] == '-' and item[7] == '-':
-                    dates.append(item)
-    # Sort descending (latest dates first)
-    dates.sort(reverse=True)
-    return dates
+    """Retrieve all unique daily dates from the SQLite DB."""
+    async with get_db_session() as session:
+        stmt = select(JobPosting.date_discovered)
+        result = await session.execute(stmt)
+        dates_set = {d.strftime("%Y-%m-%d") for d in result.scalars().all() if d}
+        dates = list(dates_set)
+        dates.sort(reverse=True)
+        return dates
 
 @app.get("/api/jobs")
 async def get_jobs_for_date(date: str):
-    """Retrieve jobs, summary, and current preferences profile for a specific date or all dates combined."""
+    """Retrieve jobs and current preferences profile from SQLite."""
     jobs = []
     summary = ""
     
-    if date == "all":
-        # Read the verified persistent all_jobs.json database
-        all_jobs_path = "data/all_jobs.json"
-        if os.path.exists(all_jobs_path):
-            try:
-                with open(all_jobs_path, "r", encoding="utf-8") as f:
-                    jobs = json.load(f)
-            except Exception as e:
-                logger.error(f"Error loading all_jobs.json: {e}")
-                            
-        # Sort aggregated jobs by match score
-        jobs.sort(key=lambda x: x.get("match_score", 0), reverse=True)
-        summary = "### Combined Job Search History\nShowing all persistent, verified open job postings discovered across all previous scans."
-    else:
-        jobs_path = os.path.join("data", date, "jobs.json")
-        summary_path = os.path.join("data", date, "summary.md")
-        
-        if os.path.exists(jobs_path):
-            try:
-                with open(jobs_path, "r", encoding="utf-8") as f:
-                    jobs = json.load(f)
-                # Sort jobs by match_score descending
-                jobs.sort(key=lambda x: x.get("match_score", 0), reverse=True)
-            except Exception as e:
-                logger.error(f"Error loading jobs.json for date {date}: {e}")
-                
-        if os.path.exists(summary_path):
-            try:
-                with open(summary_path, "r", encoding="utf-8") as f:
-                    summary = f.read()
-            except Exception as e:
-                logger.error(f"Error reading summary.md for date {date}: {e}")
+    async with get_db_session() as session:
+        if date == "all":
+            stmt = select(JobPosting).options(selectinload(JobPosting.company)).where(JobPosting.status != 'closed').order_by(desc(JobPosting.match_score))
+            result = await session.execute(stmt)
+            job_postings = result.scalars().all()
+            summary = "### Combined Job Search History\nShowing all persistent, verified open job postings discovered across all previous scans."
+        else:
+            stmt = select(JobPosting).options(selectinload(JobPosting.company)).order_by(desc(JobPosting.match_score))
+            result = await session.execute(stmt)
+            all_jobs = result.scalars().all()
+            job_postings = [j for j in all_jobs if j.date_discovered and j.date_discovered.strftime("%Y-%m-%d") == date]
+            
+        for jp in job_postings:
+            jobs.append({
+                "id": str(jp.id),
+                "url": jp.url,
+                "title": jp.title,
+                "company": jp.company.name if jp.company else "Unknown",
+                "role_category": jp.role_category,
+                "location": jp.location,
+                "source": jp.source,
+                "estimated_ctc": jp.estimated_ctc,
+                "explicit_salary_str": jp.explicit_salary_str,
+                "experience_level": jp.experience_level,
+                "required_skills": jp.required_skills,
+                "match_score": jp.match_score,
+                "match_reason": jp.match_reason,
+                "is_curve_ball": jp.is_curve_ball,
+                "curve_ball_reason": jp.curve_ball_reason,
+                "status": jp.status,
+                "feedback_comment": jp.feedback_comment,
+                "posted_date": jp.posted_date,
+                "date_discovered": jp.date_discovered.isoformat() if jp.date_discovered else ""
+            })
                 
     return {
         "date": date,
@@ -248,46 +252,34 @@ async def get_jobs_for_date(date: str):
 
 @app.get("/api/trends")
 async def get_trends():
-    """Aggregate trend statistics across recent daily directories."""
-    data_dir = "data"
-    role_counts = {}
-    company_counts = {}
+    """Aggregate trend statistics from the SQLite database."""
     total_jobs = 0
     curve_balls = 0
     high_matches = 0
+    role_counts = {}
+    company_counts = {}
     
-    if os.path.exists(data_dir):
-        # Scan last 15 days of folders
-        folders = [item for item in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, item))]
-        folders.sort(reverse=True)
+    async with get_db_session() as session:
+        stmt = select(func.count()).select_from(JobPosting)
+        total_jobs = await session.scalar(stmt)
         
-        for folder in folders[:15]:
-            jobs_path = os.path.join(data_dir, folder, "jobs.json")
-            if os.path.exists(jobs_path):
-                try:
-                    with open(jobs_path, "r", encoding="utf-8") as f:
-                        jobs_list = json.load(f)
-                    
-                    for job in jobs_list:
-                        total_jobs += 1
-                        
-                        # Count matches vs curve balls
-                        if job.get("is_curve_ball", False):
-                            curve_balls += 1
-                        elif job.get("match_score", 0) >= 80:
-                            high_matches += 1
-                            
-                        # Normalize role title
-                        title = job.get("title", "Unknown Role").strip()
-                        role_counts[title] = role_counts.get(title, 0) + 1
-                        
-                        # Company count
-                        company = job.get("company", "Unknown Company").strip()
-                        company_counts[company] = company_counts.get(company, 0) + 1
-                except Exception as e:
-                    logger.error(f"Error reading trends from {jobs_path}: {e}")
-                    
-    # Sort dicts
+        stmt = select(func.count()).select_from(JobPosting).where(JobPosting.is_curve_ball == True)
+        curve_balls = await session.scalar(stmt)
+        
+        stmt = select(func.count()).select_from(JobPosting).where(JobPosting.match_score >= 80)
+        high_matches = await session.scalar(stmt)
+        
+        stmt = select(JobPosting).options(selectinload(JobPosting.company))
+        result = await session.execute(stmt)
+        all_jobs = result.scalars().all()
+        
+        for job in all_jobs:
+            title = job.title.strip() if job.title else "Unknown Role"
+            role_counts[title] = role_counts.get(title, 0) + 1
+            
+            company = job.company.name.strip() if job.company else "Unknown Company"
+            company_counts[company] = company_counts.get(company, 0) + 1
+            
     sorted_roles = [{"role": k, "count": v} for k, v in sorted(role_counts.items(), key=lambda x: x[1], reverse=True)]
     sorted_companies = [{"company": k, "count": v} for k, v in sorted(company_counts.items(), key=lambda x: x[1], reverse=True)]
     
@@ -302,147 +294,89 @@ async def get_trends():
 @app.post("/api/feedback")
 async def submit_feedback(req: FeedbackRequest, background_tasks: BackgroundTasks):
     """Submit rating and comment for a job posting, and asynchronously update preferences profile."""
-    jobs_path = os.path.join("data", req.date, "jobs.json")
-    if not os.path.exists(jobs_path):
-        raise HTTPException(status_code=404, detail="Data folder for this date not found.")
-        
-    try:
-        with open(jobs_path, "r", encoding="utf-8") as f:
-            jobs_list = json.load(f)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load jobs list: {e}")
-        
-    # Find the job and update it
-    job_found = None
-    for job in jobs_list:
-        if job["id"] == req.job_id:
-            job["status"] = req.status
-            job["feedback_comment"] = req.comment
-            job_found = job
-            break
-            
-    if not job_found:
-        raise HTTPException(status_code=404, detail="Job ID not found in daily records.")
-        
-    # Write back updated jobs.json
-    try:
-        with open(jobs_path, "w", encoding="utf-8") as f:
-            json.dump(jobs_list, f, indent=2)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save feedback: {e}")
-        
-    # Load config and promote company to target_companies if thumbs_up
     config = load_config()
-    if req.status == "thumbs_up":
-        t_cos = config.get("target_companies", [])
-        co_name = job_found.get("company", "").strip()
-        if co_name and co_name != "N/A" and co_name not in t_cos:
-            t_cos.append(co_name)
-            config["target_companies"] = t_cos
-            
-            # Cache career/portal page if it's a direct company-specific portal
-            career_pages = config.get("company_career_pages", {})
-            job_url = job_found.get("url", "")
-            if job_url and ("greenhouse.io" in job_url or "lever.co" in job_url) and co_name not in career_pages:
-                career_pages[co_name] = job_url
-                config["company_career_pages"] = career_pages
-                
-            try:
-                with open("config.json", "w", encoding="utf-8") as cf:
-                    json.dump(config, cf, indent=2)
-                logger.info(f"Promoted company '{co_name}' to target list and cached career link.")
-            except Exception as e:
-                logger.error(f"Failed to save config.json on company promotion: {e}")
-
     model_name = config.get("ollama_model", "deepseek-r1:1.5b")
     
-    # Enqueue background task to update resumes/preferences.md using Ollama
-    background_tasks.add_task(
-        update_preferences_profile,
-        job_title=job_found["title"],
-        company=job_found["company"],
-        status=req.status,
-        comment=req.comment,
-        preferences_path=config.get("preferences_path", "resumes/preferences.md"),
-        model_name=model_name
-    )
-    
+    async with get_db_session() as session:
+        stmt = select(JobPosting).options(selectinload(JobPosting.company)).where(JobPosting.id == int(req.job_id))
+        result = await session.execute(stmt)
+        job_found = result.scalar_one_or_none()
+        
+        if not job_found:
+            raise HTTPException(status_code=404, detail="Job ID not found in database.")
+            
+        job_found.status = req.status
+        job_found.feedback_comment = req.comment
+        await session.commit()
+        
+        co_name = job_found.company.name if job_found.company else "Unknown"
+        
+        if req.status == "thumbs_up":
+            t_cos = config.get("target_companies", [])
+            if co_name and co_name != "N/A" and co_name not in t_cos and co_name != "Unknown":
+                t_cos.append(co_name)
+                config["target_companies"] = t_cos
+                
+                career_pages = config.get("company_career_pages", {})
+                job_url = job_found.url
+                if job_url and ("greenhouse.io" in job_url or "lever.co" in job_url) and co_name not in career_pages:
+                    career_pages[co_name] = job_url
+                    config["company_career_pages"] = career_pages
+                    
+                try:
+                    with open("config.json", "w", encoding="utf-8") as cf:
+                        json.dump(config, cf, indent=2)
+                    logger.info(f"Promoted company '{co_name}' to target list.")
+                except Exception as e:
+                    logger.error(f"Failed to save config.json on company promotion: {e}")
+
+        # Enqueue background task
+        background_tasks.add_task(
+            update_preferences_profile,
+            job_title=job_found.title,
+            company=co_name,
+            status=req.status,
+            comment=req.comment,
+            preferences_path=config.get("preferences_path", ".resumes/preferences.md"),
+            model_name=model_name
+        )
+        
     return {"status": "success", "message": "Feedback recorded, preference profile update scheduled."}
 
 @app.post("/api/scan")
-async def trigger_scan():
-    """Spawns the job search agent script in the background."""
-    global scan_process
+async def trigger_scan(background_tasks: BackgroundTasks):
+    """Spawns the orchestrator DAG workflow in the background."""
+    global scan_task
     async with scan_lock:
-        if scan_process and scan_process.poll() is None:
-            return {"status": "running", "message": "Scan already in progress."}
-            
-        # Clean up scan_status.json from previous runs if it exists
-        status_path = os.path.join("data", "scan_status.json")
-        if os.path.exists(status_path):
-            try:
-                os.remove(status_path)
-            except Exception:
-                pass
-
-        python_exe = os.path.join(".venv", "Scripts", "python.exe")
-        if not os.path.exists(python_exe):
-            python_exe = "python"
-            
-        try:
-            logger.info("Spawning background job_agent.py subprocess...")
-            scan_process = subprocess.Popen([python_exe, "job_agent.py"])
-            return {"status": "started", "message": "Job agent scan started in background."}
-        except Exception as e:
-            logger.error(f"Failed to start scan process: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to start scan: {str(e)}")
+        async with get_db_session() as session:
+            stmt = select(ScanLog).order_by(desc(ScanLog.run_time)).limit(1)
+            result = await session.execute(stmt)
+            latest_scan = result.scalar_one_or_none()
+            if latest_scan and latest_scan.status == "running":
+                return {"status": "running", "message": "Scan already in progress."}
+                
+        config = load_config()
+        resume_path = config.get("preferences_path", ".resumes/preferences.md")
+        
+        logger.info("Spawning background orchestrator pipeline...")
+        scan_task = asyncio.create_task(run_pipeline(resume_path=resume_path, preferences=config))
+        return {"status": "started", "message": "Job agent scan started in background."}
 
 @app.get("/api/scan/status")
 async def get_scan_status():
-    """Check if the background scan is running and read real-time status."""
-    global scan_process
-    
-    # Read the scan status JSON if it exists
-    status_data = {}
-    status_path = os.path.join("data", "scan_status.json")
-    if os.path.exists(status_path):
-        try:
-            with open(status_path, "r", encoding="utf-8") as f:
-                status_data = json.load(f)
-        except Exception as e:
-            logger.error(f"Error reading scan_status.json: {e}")
-
-    if scan_process is None:
-        return {
-            "status": status_data.get("status", "idle"),
-            "current_company": status_data.get("current_company", ""),
-            "completed_companies": status_data.get("completed_companies", [])
-        }
+    """Query the ScanLog table and return the most recent entry."""
+    async with get_db_session() as session:
+        stmt = select(ScanLog).order_by(desc(ScanLog.run_time)).limit(1)
+        result = await session.execute(stmt)
+        latest_scan = result.scalar_one_or_none()
         
-    poll_res = scan_process.poll()
-    if poll_res is None:
+        if not latest_scan:
+            return {"status": "idle", "jobs_discovered": 0}
+            
         return {
-            "status": "running",
-            "current_company": status_data.get("current_company", ""),
-            "completed_companies": status_data.get("completed_companies", [])
-        }
-    else:
-        # Completed
-        exit_code = poll_res
-        final_status = "completed" if exit_code == 0 else "failed"
-        
-        # Clean up scan_status.json after completion so subsequent checks don't see stale running state
-        if os.path.exists(status_path):
-            try:
-                os.remove(status_path)
-            except Exception:
-                pass
-                
-        return {
-            "status": final_status,
-            "exit_code": exit_code,
-            "current_company": "",
-            "completed_companies": status_data.get("completed_companies", [])
+            "status": latest_scan.status,
+            "jobs_discovered": latest_scan.jobs_discovered,
+            "error_message": latest_scan.error_message
         }
 
 class CompaniesRequest(BaseModel):
@@ -645,27 +579,25 @@ async def toggle_restrict(req: RestrictToggleRequest):
 
 @app.post("/api/scan/kill")
 async def kill_scan():
-    """Kill the active job agent search process tree."""
-    global scan_process
+    """Kill the active async background scan task."""
+    global scan_task
     async with scan_lock:
-        if not scan_process or scan_process.poll() is not None:
-            return {"status": "idle", "message": "No scan is currently running."}
+        if scan_task and not scan_task.done():
+            scan_task.cancel()
+            scan_task = None
             
-        try:
-            logger.info(f"Terminating scan process tree with PID {scan_process.pid}...")
-            # Use taskkill to kill process tree on Windows
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(scan_process.pid)], capture_output=True)
-            scan_process = None
-            return {"status": "killed", "message": "Scan process tree terminated successfully."}
-        except Exception as e:
-            logger.error(f"Failed to kill scan process tree: {e}")
-            try:
-                # Fallback to standard terminate
-                scan_process.terminate()
-                scan_process = None
-                return {"status": "killed", "message": "Scan process terminated via fallback."}
-            except Exception as fe:
-                raise HTTPException(status_code=500, detail=f"Failed to terminate scan: {fe}")
+            # Mark as failed in DB
+            async with get_db_session() as session:
+                stmt = select(ScanLog).order_by(desc(ScanLog.run_time)).limit(1)
+                result = await session.execute(stmt)
+                latest_scan = result.scalar_one_or_none()
+                if latest_scan and latest_scan.status == "running":
+                    latest_scan.status = "failed"
+                    latest_scan.error_message = "Killed by user."
+                    await session.commit()
+            return {"status": "killed", "message": "Scan task terminated."}
+            
+        return {"status": "idle", "message": "No scan is currently running."}
 
 if __name__ == "__main__":
     import uvicorn
