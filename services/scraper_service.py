@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, Page, Response
 from typing import List, Dict, Any
@@ -103,7 +104,11 @@ class ScraperService:
         try:
             # Fix 5: The IP Ban Risk (Introduce random jitter)
             await asyncio.sleep(random.uniform(1.0, 3.5))
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.goto(url, wait_until="networkidle", timeout=15000)
+            
+            # Hard Jitter for SPAs to render DOM after network idle
+            await asyncio.sleep(2)
+            
             content = await page.content()
             soup = BeautifulSoup(content, 'html.parser')
             
@@ -111,7 +116,22 @@ class ScraperService:
             for script in soup(["script", "style", "nav", "footer", "header"]):
                 script.extract()
                 
-            text_content = soup.get_text(separator=' ', strip=True)
+            # Attempt extraction using standard ATS selectors
+            ats_selectors = ["main", ".job-description", "article"]
+            for selector in ats_selectors:
+                element = soup.select_one(selector)
+                if element:
+                    text_content = element.get_text(separator=' ', strip=True)
+                    if text_content:
+                        break
+            
+            # Fallback to evaluating document.body.innerText if selectors yield no text
+            if not text_content:
+                text_content = await page.evaluate("document.body.innerText")
+            
+            # Clean text: strip excessive whitespace and newlines
+            if text_content:
+                text_content = re.sub(r'\s+', ' ', text_content).strip()
             
         except Exception as e:
             logger.error(f"Error extracting job description from {url}: {e}")

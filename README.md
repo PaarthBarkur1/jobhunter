@@ -26,7 +26,7 @@ Welcome to the **Job Hunter Agent & Dashboard**, a semi-automated job search ass
 
 * **`core/models.py` & `core/database.py`**: Defines the SQLite database schema (JobPosting, Company, ScanLog) and async SQLAlchemy engine for robust state management.
 * **`workers/orchestrator.py`**: The central async DAG workflow coordinator. Replaces the old monolithic `job_agent.py`. It delegates discovery, extraction, and evaluation across specialized services.
-* **`services/scraper_service.py`**: Handles Playwright initialization and extracts jobs via API interception or fallback DOM parsing (no LLMs used for DOM parsing).
+* **`services/scraper_service.py`**: Handles Playwright initialization and extracts jobs via API interception or fallback DOM parsing (no LLMs used for DOM parsing). It uses strict waiting protocols (`networkidle`, jitter) and JavaScript text extraction fallbacks for highly dynamic SPAs.
 * **`services/llm_service.py`**: Async wrapper for the local LLM (Ollama), featuring a strict concurrency-1 queue to prevent VRAM OOM errors and enforcing JSON schema output.
 * **`services/evaluator_service.py`**: Accepts job descriptions and candidate resumes to generate semantic match scores and extract required skills via the LLM service.
 * **`app.py`**: The FastAPI backend server serving the static dashboard and REST endpoints.
