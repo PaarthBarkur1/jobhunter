@@ -247,20 +247,22 @@ async def fetch_web_page(url: str) -> str:
     
     # Strip non-content and boilerplate HTML elements to conserve tokens
     soup = BeautifulSoup(html, "html.parser")
-    for element in soup(["script", "style", "nav", "footer", "header", "aside", "noscript", "svg"]):
+    for element in soup(["script", "style", "nav", "footer", "header", "aside", "noscript", "svg", "form", "button"]):
         element.decompose()
         
     text = soup.get_text(separator="\n")
+    # Clean up excessive blank lines
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     cleaned_text = "\n".join(lines)
     
-    # Limit response length to save context space
-    return cleaned_text[:4000]
+    # Limit response length to save context space but provide enough for large job descriptions
+    return cleaned_text[:15000]
 
 @mcp.tool()
 async def scrape_company_career_page(
     company: str,
     role_keywords: str = "",
+    target_location: str = "",
     max_jobs: int = 15,
 ) -> str:
     """
@@ -313,6 +315,7 @@ async def scrape_company_career_page(
     result = await scrape_company_careers(
         company=company,
         role_keywords=keywords,
+        target_location=target_location,
         max_jobs=max_jobs,
         get_browser_context=browser_manager.get_page,
     )

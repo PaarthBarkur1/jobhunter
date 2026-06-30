@@ -28,26 +28,25 @@ ROLE_KEYWORDS_DEFAULT = [
 
 
 def _matches_role(title: str, location: str, keywords: List[str]) -> bool:
+    if not keywords:
+        return True
     text = f"{title} {location}".lower()
-    role_terms = set()
     for kw in keywords:
-        role_terms.add(kw.lower())
-        for part in re.split(r"[\s,/\-]+", kw.lower()):
-            if len(part) > 3:
-                role_terms.add(part)
-    # Common synonyms for quant/data roles
-    role_terms.update(["scientist", "science", "quant", "researcher", "analyst", "machine learning", "ml ", " ai"])
-    return any(term in text for term in role_terms if len(term) > 2)
+        kw_lower = kw.lower()
+        # Use substring match rather than strict word boundaries
+        # because scraped data often smashes words together (e.g., 'iconSoftware Engineer')
+        if kw_lower in text:
+            return True
+    return False
 
-
-def _matches_india(location: str) -> bool:
-    loc = location.lower()
-    india_markers = [
-        "india", "bengaluru", "bangalore", "hyderabad", "mumbai", "gurugram",
-        "gurgaon", "pune", "delhi", "ncr", "remote", "ind-",
-    ]
-    return any(m in loc for m in india_markers)
-
+def _matches_location(location: str, target_location: str) -> bool:
+    if not target_location:
+        return True
+    loc_lower = location.lower()
+    t_loc = target_location.lower()
+    if "remote" in loc_lower or "anywhere" in loc_lower:
+        return True
+    return t_loc in loc_lower
 
 def _dedupe_jobs(jobs: List[dict]) -> List[dict]:
     seen = set()
@@ -65,7 +64,7 @@ def _dedupe_jobs(jobs: List[dict]) -> List[dict]:
 # ATS API scrapers (fast, reliable)
 # ---------------------------------------------------------------------------
 
-def _scrape_lever(cfg: CareerPageConfig, keywords: List[str], max_jobs: int) -> List[dict]:
+def _scrape_lever(cfg: CareerPageConfig, keywords: List[str], target_location: str, max_jobs: int) -> List[dict]:
     slug = cfg.ats_slug
     if not slug:
         return []
@@ -82,7 +81,7 @@ def _scrape_lever(cfg: CareerPageConfig, keywords: List[str], max_jobs: int) -> 
     for post in postings:
         title = post.get("text", "")
         location = post.get("categories", {}).get("location", "")
-        if not _matches_role(title, location, keywords):
+        if not _matches_role(title, location, keywords) or not _matches_location(location, target_location):
             continue
         jobs.append({
             "title": title,
@@ -97,7 +96,7 @@ def _scrape_lever(cfg: CareerPageConfig, keywords: List[str], max_jobs: int) -> 
     return jobs
 
 
-def _scrape_greenhouse(cfg: CareerPageConfig, keywords: List[str], max_jobs: int) -> List[dict]:
+def _scrape_greenhouse(cfg: CareerPageConfig, keywords: List[str], target_location: str, max_jobs: int) -> List[dict]:
     slug = cfg.ats_slug
     if not slug:
         return []
@@ -114,7 +113,7 @@ def _scrape_greenhouse(cfg: CareerPageConfig, keywords: List[str], max_jobs: int
     for post in data.get("jobs", []):
         title = post.get("title", "")
         location = post.get("location", {}).get("name", "") if isinstance(post.get("location"), dict) else str(post.get("location", ""))
-        if not _matches_role(title, location, keywords):
+        if not _matches_role(title, location, keywords) or not _matches_location(location, target_location):
             continue
         jobs.append({
             "title": title,
@@ -129,7 +128,7 @@ def _scrape_greenhouse(cfg: CareerPageConfig, keywords: List[str], max_jobs: int
     return jobs
 
 
-def _scrape_rippling(cfg: CareerPageConfig, keywords: List[str], max_jobs: int) -> List[dict]:
+def _scrape_rippling(cfg: CareerPageConfig, keywords: List[str], target_location: str, max_jobs: int) -> List[dict]:
     slug = cfg.ats_slug
     if not slug:
         return []
@@ -150,7 +149,7 @@ def _scrape_rippling(cfg: CareerPageConfig, keywords: List[str], max_jobs: int) 
             location = location.get("name", "")
         job_id = post.get("id", post.get("uuid", ""))
         url = post.get("url") or f"https://ats.rippling.com/{slug}/jobs/{job_id}"
-        if not _matches_role(title, str(location), keywords):
+        if not _matches_role(title, str(location), keywords) or not _matches_location(str(location), target_location):
             continue
         jobs.append({
             "title": title,
@@ -169,7 +168,7 @@ def _scrape_rippling(cfg: CareerPageConfig, keywords: List[str], max_jobs: int) 
 # Playwright navigation scraper
 # ---------------------------------------------------------------------------
 
-async def _try_auto_search(page, keyword: str, location: str = "India"):
+async def _try_auto_search(page, keyword: str, location: str):
     """
     Dynamically scans the page for keyword and location input fields,
     fills them, handles autocompletion suggestions, and triggers search.
@@ -290,7 +289,7 @@ async def _try_auto_search(page, keyword: str, location: str = "India"):
         logger.error(f"Auto-Search failed: {e}")
 
 
-async def _execute_navigation(page, cfg: CareerPageConfig, keyword: str):
+async def _execute_navigation(page, cfg: CareerPageConfig, keyword: str, target_location: str = ""):
     """Run configured navigation steps on a Playwright page."""
     start_url = resolve_start_url(cfg)
     for step in cfg.navigation_steps:
@@ -298,7 +297,7 @@ async def _execute_navigation(page, cfg: CareerPageConfig, keyword: str):
         if action == "goto":
             url = step["url"].format(
                 career_url=cfg.career_url,
-                india_url=cfg.india_url or cfg.career_url,
+                regional_url=cfg.regional_url or cfg.career_url,
                 keyword=keyword,
             )
             await page.goto(url, wait_until="load", timeout=25000)
@@ -338,58 +337,131 @@ async def _execute_navigation(page, cfg: CareerPageConfig, keyword: str):
             except Exception:
                 pass
         elif action == "auto_search":
-            location = step.get("location", "India")
-            await _try_auto_search(page, keyword, location)
+            await _try_auto_search(page, keyword, location=target_location)
 
 
-def _extract_links_from_html(html: str, base_url: str, cfg: CareerPageConfig) -> List[dict]:
+async def _extract_jobs_with_llm(html: str, base_url: str, cfg: CareerPageConfig, keywords: List[str]) -> List[dict]:
     from bs4 import BeautifulSoup
-
+    import ollama
+    import asyncio
+    
     soup = BeautifulSoup(html, "html.parser")
-    jobs = []
-    patterns = [re.compile(p, re.I) for p in cfg.job_link_patterns]
-
+    
+    links = []
+    seen = set()
     for anchor in soup.find_all("a", href=True):
         href = anchor["href"].strip()
         if href.startswith("/"):
             href = urljoin(base_url, href)
-        if not href.startswith("http"):
-            continue
-        matched = any(p.search(href) for p in patterns) if patterns else False
-        if not matched:
-            continue
+        if not href.startswith("http"): continue
+        if href in seen: continue
+        
         title = anchor.get_text(strip=True)
-        if len(title) < 3 or title.lower() in ("apply", "learn more", "read more", "search"):
-            parent = anchor.parent
-            if parent:
-                title_el = parent.find(class_=lambda c: c and any(x in c.lower() for x in ["title", "name", "heading", "header"]))
-                if title_el:
-                    title = title_el.get_text(strip=True)
-                else:
-                    lines = [line.strip() for line in parent.get_text("\n").split("\n") if line.strip()]
-                    if lines:
-                        title = lines[0]
         title = re.sub(r'\s+', ' ', title).strip()
-        if len(title) < 3 or title.lower() in ("apply", "learn more", "read more", "search"):
+        if len(title) < 3 or title.lower() in ("apply", "learn more", "read more", "search", "cookie policy", "privacy policy"):
             continue
-        jobs.append({
-            "title": title[:200],
-            "url": href.split("#")[0],
-            "snippet": "",
-            "company": cfg.company,
-            "location": "",
-            "source": "career_portal",
-        })
-    return jobs
+            
+        links.append({"title": title[:200], "url": href.split("#")[0]})
+        seen.add(href)
+        
+    if not links:
+        return []
+        
+    # Get ollama config
+    try:
+        with open("config.json", "r") as f:
+            global_config = json.load(f)
+    except:
+        global_config = {}
+    model_name = global_config.get("ollama_model", "deepseek-r1:1.5b")
+    host = global_config.get("ollama_host", "http://127.0.0.1:11434")
+    
+    client = ollama.AsyncClient(host=host)
+    
+    prompt_links = links
+    if len(prompt_links) > 40:
+        # Pre-filter to prioritize relevant roles and avoid context window truncation
+        kws = [k.lower() for k in keywords] + ["engineer", "developer", "quant", "data", "analyst", "scientist", "research", "tech"]
+        filtered = [l for l in prompt_links if any(kw in l["title"].lower() or kw in l["url"].lower() for kw in kws)]
+        if len(filtered) > 5:
+            prompt_links = filtered
+    prompt_links = prompt_links[:40] # Cap to prevent context overflow
+    
+    roles_str = ", ".join(keywords) if keywords else "software, engineering, AI, or quant"
+    prompt = f"You are an AI web navigator. Here are links found on {cfg.company}'s career page. Return a JSON list of ONLY the URLs that represent individual job postings matching these roles: {roles_str}. Output ONLY a raw JSON array of strings, like [\"url1\", \"url2\"].\n\nLinks:\n"
+    for i, link in enumerate(prompt_links):
+        title = link['title']
+        if len(title) > 60:
+            title = title[:57] + "..."
+        prompt += f"{i+1}. {title} - {link['url']}\n"
+        
+    try:
+        resp = await asyncio.wait_for(
+            client.chat(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                format="json",
+                options={"num_ctx": 4096, "num_predict": 1024}
+            ),
+            timeout=60
+        )
+        content = resp['message']['content']
+        try:
+            valid_urls = json.loads(content)
+            if isinstance(valid_urls, dict):
+                for v in valid_urls.values():
+                    if isinstance(v, list):
+                        valid_urls = v
+                        break
+            if not isinstance(valid_urls, list):
+                valid_urls = []
+        except Exception:
+            valid_urls = []
+            
+        jobs = []
+        for link in links:
+            if link["url"] in valid_urls:
+                jobs.append({
+                    "title": link["title"],
+                    "url": link["url"],
+                    "snippet": "Discovered via LLM web navigator.",
+                    "company": cfg.company,
+                    "location": "",
+                    "source": "career_portal"
+                })
+        logger.info(f"LLM Navigator found {len(jobs)} valid job URLs out of {len(links)} links on {cfg.company} page.")
+        
+        # If the LLM returns absolutely nothing but there were matching links, 
+        # it might have hallucinated or over-filtered. Fallback to keyword search.
+        if len(jobs) == 0 and len(prompt_links) > 0:
+            raise ValueError("LLM returned 0 jobs despite having relevant prompt links")
+            
+        return jobs
+    except Exception as e:
+        logger.warning(f"LLM extraction failed or returned 0 jobs for {cfg.company}: {e}. Falling back to keyword search.")
+        fallback = []
+        fallback_kws = [k.lower() for k in keywords] if keywords else ["engineer", "developer", "scientist", "quant", "analyst"]
+        for link in links:
+            if any(k in link["title"].lower() for k in fallback_kws):
+                fallback.append({
+                    "title": link["title"],
+                    "url": link["url"],
+                    "snippet": "Discovered via fallback keyword search.",
+                    "company": cfg.company,
+                    "location": "",
+                    "source": "career_portal"
+                })
+        return fallback
 
 
-async def _scrape_with_playwright(cfg: CareerPageConfig, keywords: List[str], max_jobs: int, get_browser_context) -> List[dict]:
+
+async def _scrape_with_playwright(cfg: CareerPageConfig, keywords: List[str], target_location: str, max_jobs: int, get_browser_context) -> List[dict]:
 
     # To be extremely efficient and respect the page's location/search filters,
     # if the config uses a location filter (like auto_search or india_url) or pagination,
     # we run a single search with an empty keyword. This utilizes the portal's built-in location filter (e.g. Bengaluru) to load all jobs.
     use_location_only = (
-        cfg.india_url is not None or 
+        cfg.regional_url is not None or 
         any(step.get("action") == "auto_search" for step in cfg.navigation_steps) or
         cfg.pagination_selector is not None
     )
@@ -405,11 +477,11 @@ async def _scrape_with_playwright(cfg: CareerPageConfig, keywords: List[str], ma
             if use_location_only:
                 logger.info("Using browser_manager-style page provider")
                 logger.info(f"Using location/portal filters for '{cfg.company}' to scrape efficiently...")
-                await _execute_navigation(page, cfg, "")
+                await _execute_navigation(page, cfg, "", target_location)
 
                 # Extract initial page
                 html = await page.content()
-                all_jobs.extend(_extract_links_from_html(html, page.url, cfg))
+                all_jobs.extend(await _extract_jobs_with_llm(html, page.url, cfg, keywords))
 
                 # Paginate if selector is available
                 if cfg.pagination_selector:
@@ -428,7 +500,7 @@ async def _scrape_with_playwright(cfg: CareerPageConfig, keywords: List[str], ma
                                     pass
 
                                 html = await page.content()
-                                new_jobs = _extract_links_from_html(html, page.url, cfg)
+                                new_jobs = await _extract_jobs_with_llm(html, page.url, cfg, keywords)
                                 if not new_jobs:
                                     logger.info("No more jobs found on next page. Stopping pagination.")
                                     break
@@ -449,16 +521,16 @@ async def _scrape_with_playwright(cfg: CareerPageConfig, keywords: List[str], ma
             else:
                 # Fallback: standard keyword-by-keyword search
                 keyword = keywords[0] if keywords else "data scientist"
-                await _execute_navigation(page, cfg, keyword)
+                await _execute_navigation(page, cfg, keyword, target_location)
                 html = await page.content()
-                all_jobs.extend(_extract_links_from_html(html, page.url, cfg))
+                all_jobs.extend(await _extract_jobs_with_llm(html, page.url, cfg, keywords))
 
                 # Try additional keyword searches on same portal
                 # Run up to 2 additional searches but avoid long sequential waits
                 for kw in keywords[1:3]:
-                    await _execute_navigation(page, cfg, kw)
+                    await _execute_navigation(page, cfg, kw, target_location)
                     html = await page.content()
-                    all_jobs.extend(_extract_links_from_html(html, page.url, cfg))
+                    all_jobs.extend(await _extract_jobs_with_llm(html, page.url, cfg, keywords))
     except TypeError:
         # Fallback for older callers that expect a `(playwright)` -> context function
         logger.info("get_browser_context() did not accept zero args; falling back to legacy playwright flow")
@@ -471,16 +543,16 @@ async def _scrape_with_playwright(cfg: CareerPageConfig, keywords: List[str], ma
                     if use_location_only:
                         await _execute_navigation(page, cfg, "")
                         html = await page.content()
-                        all_jobs.extend(_extract_links_from_html(html, page.url, cfg))
+                        all_jobs.extend(await _extract_jobs_with_llm(html, page.url, cfg, keywords))
                     else:
                         keyword = keywords[0] if keywords else "data scientist"
                         await _execute_navigation(page, cfg, keyword)
                         html = await page.content()
-                        all_jobs.extend(_extract_links_from_html(html, page.url, cfg))
+                        all_jobs.extend(await _extract_jobs_with_llm(html, page.url, cfg, keywords))
                         for kw in keywords[1:3]:
                             await _execute_navigation(page, cfg, kw)
                             html = await page.content()
-                            all_jobs.extend(_extract_links_from_html(html, page.url, cfg))
+                            all_jobs.extend(await _extract_jobs_with_llm(html, page.url, cfg, keywords))
                 finally:
                     try:
                         await context.close()
@@ -506,6 +578,7 @@ async def _scrape_with_playwright(cfg: CareerPageConfig, keywords: List[str], ma
 async def scrape_company_careers(
     company: str,
     role_keywords: Optional[List[str]] = None,
+    target_location: str = "",
     max_jobs: int = 15,
     get_browser_context=None,
 ) -> dict:
@@ -514,20 +587,21 @@ async def scrape_company_careers(
     Returns {company, career_url, portal_type, navigation_instructions, jobs: [...]}
     """
     cfg = get_career_config(company)
+    
+    # Fallback and overriding: check if we have a user-defined URL mapping in config.json
+    import json
+    import os
+    user_url = None
+    if os.path.exists("config.json"):
+        try:
+            with open("config.json", "r", encoding="utf-8") as f:
+                app_config = json.load(f)
+                user_url = app_config.get("company_career_pages", {}).get(company)
+        except Exception:
+            pass
+            
     if not cfg:
-        # Fallback: check if we have a user-defined URL mapping in config.json
-        import json
-        import os
-        career_url = None
-        if os.path.exists("config.json"):
-            try:
-                with open("config.json", "r", encoding="utf-8") as f:
-                    app_config = json.load(f)
-                    career_url = app_config.get("company_career_pages", {}).get(company)
-            except Exception:
-                pass
-                
-        if not career_url:
+        if not user_url:
             return {
                 "company": company,
                 "error": f"No hardcoded career page and no user URL mapping in config.json for '{company}'.",
@@ -539,32 +613,30 @@ async def scrape_company_careers(
         ats_slug = None
         
         # Check for greenhouse / lever / rippling in URL
-        if "greenhouse.io" in career_url:
+        if "greenhouse.io" in user_url:
             portal_type = "greenhouse"
-            match = re.search(r'greenhouse\.io/([^/?#\s]+)', career_url)
+            match = re.search(r'greenhouse\.io/([^/?#\s]+)', user_url)
             if match:
                 ats_slug = match.group(1)
-        elif "lever.co" in career_url:
+        elif "lever.co" in user_url:
             portal_type = "lever"
-            match = re.search(r'lever\.co/([^/?#\s]+)', career_url)
+            match = re.search(r'lever\.co/([^/?#\s]+)', user_url)
             if match:
                 ats_slug = match.group(1)
-        elif "rippling.com" in career_url:
+        elif "rippling.com" in user_url:
             portal_type = "rippling"
-            match = re.search(r'rippling\.com/([^/?#\s]+)', career_url)
+            match = re.search(r'rippling\.com/([^/?#\s]+)', user_url)
             if match:
                 ats_slug = match.group(1)
-                
+        elif "workday" in user_url or "myworkdayjobs.com" in user_url:
+            portal_type = "workday"
+            
         cfg = CareerPageConfig(
             company=company,
-            career_url=career_url,
+            career_url=user_url,
+            regional_url=user_url,
             portal_type=portal_type,
             ats_slug=ats_slug,
-            job_link_patterns=[
-                r"/jobs/\d+", r"/jobs/[^/]+", r"/job/\d+", r"/careers/\d+",
-                r"greenhouse\.io", r"lever\.co", r"/careers/[^/]+", r"/opportunities/[^/]+",
-                r"/careersection/", r"/jobs/[^/]+/\d+"
-            ],
             navigation_steps=[
                 {"action": "goto", "url": "{career_url}"},
                 {"action": "wait", "ms": 4000},
@@ -574,17 +646,26 @@ async def scrape_company_careers(
             ],
             model_instructions=f"Dynamic generic crawling for {company} based on user URL."
         )
+    else:
+        # If config exists in registry, OVERRIDE its URL with the user's config.json URL to prevent hardcoding
+        if user_url:
+            cfg.career_url = user_url
+            cfg.regional_url = user_url
+            # Also update navigation steps that use literal URLs
+            for step in cfg.navigation_steps:
+                if step.get("url") and "http" in step["url"]:
+                    step["url"] = user_url
 
     keywords = role_keywords or ROLE_KEYWORDS_DEFAULT
     jobs: List[dict] = []
 
     # Fast path: known ATS APIs
     if cfg.portal_type == "lever" and cfg.ats_slug:
-        jobs = _scrape_lever(cfg, keywords, max_jobs)
+        jobs = _scrape_lever(cfg, keywords, target_location, max_jobs)
     elif cfg.portal_type == "greenhouse" and cfg.ats_slug:
-        jobs = _scrape_greenhouse(cfg, keywords, max_jobs)
+        jobs = _scrape_greenhouse(cfg, keywords, target_location, max_jobs)
     elif cfg.portal_type == "rippling" and cfg.ats_slug:
-        jobs = _scrape_rippling(cfg, keywords, max_jobs)
+        jobs = _scrape_rippling(cfg, keywords, target_location, max_jobs)
     elif cfg.portal_type == "custom_uber":
         # Uber Freight posts on Greenhouse — supplement main portal
         freight_cfg = CareerPageConfig(
@@ -593,12 +674,12 @@ async def scrape_company_careers(
             portal_type="greenhouse",
             ats_slug="uberfreight",
         )
-        jobs = _scrape_greenhouse(freight_cfg, keywords, max_jobs)
+        jobs = _scrape_greenhouse(freight_cfg, keywords, target_location, max_jobs)
 
     # Browser path for custom/workday/google/etc.
     if len(jobs) < max_jobs and get_browser_context is not None:
         try:
-            browser_jobs = await _scrape_with_playwright(cfg, keywords, max_jobs - len(jobs), get_browser_context)
+            browser_jobs = await _scrape_with_playwright(cfg, keywords, target_location, max_jobs - len(jobs), get_browser_context)
             jobs.extend(browser_jobs)
         except Exception as e:
             logger.error(f"Playwright career scrape failed for {cfg.company}: {e}")

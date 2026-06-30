@@ -20,8 +20,54 @@ app = FastAPI(title="Job Hunter Dashboard API")
 # Global tracking for background scan process
 scan_process = None
 scheduler_process = None
+ollama_process = None
 scan_lock = asyncio.Lock()
 scheduler_lock = asyncio.Lock()
+
+import socket
+
+def is_ollama_running(host='127.0.0.1', port=11434) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1.0)
+        return s.connect_ex((host, port)) == 0
+
+@app.on_event("startup")
+async def startup_event():
+    global ollama_process
+    if not is_ollama_running():
+        logger.info("Ollama server not detected on port 11434. Starting 'ollama serve' in background with GPU optimizations...")
+        env = os.environ.copy()
+        # Prevent the model from being aggressively unloaded to save VRAM swapping/crashes
+        env["OLLAMA_KEEP_ALIVE"] = "24h"
+        # Ensure CUDA is enabled (we don't disable it since user wants GPU efficiency)
+        if "CUDA_VISIBLE_DEVICES" in env and env["CUDA_VISIBLE_DEVICES"] == "":
+            del env["CUDA_VISIBLE_DEVICES"]
+            
+        try:
+            ollama_process = subprocess.Popen(
+                ["ollama", "serve"],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                # On Windows, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP prevents Ctrl+C from killing it abruptly before shutdown hook
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
+            )
+            logger.info("Successfully launched Ollama server.")
+        except Exception as e:
+            logger.error(f"Failed to launch Ollama server: {e}")
+    else:
+        logger.info("Detected existing Ollama server running.")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global ollama_process
+    if ollama_process:
+        logger.info("Shutting down background Ollama server...")
+        try:
+            ollama_process.terminate()
+            ollama_process.wait(timeout=5)
+        except Exception as e:
+            logger.error(f"Error terminating Ollama: {e}")
 
 # Pydantic request models
 class FeedbackRequest(BaseModel):
@@ -43,22 +89,24 @@ def get_preferences_content() -> str:
 
 DEFAULT_CONFIG = {
     "ollama_model": "deepseek-r1:1.5b",
-    "target_compensation_threshold_lpa": 35,
+    "target_compensation_threshold": 100000,
+    "currency": "USD",
+    "target_location": "Remote",
+    "disliked_companies": ["infosys", "wipro", "tcs", "cognizant"],
     "resumes_dir": ".resumes",
     "search_queries": [
         "data scientist",
         "applied scientist",
-        "Credit data scientist",
         "quant analyst",
-        "site:linkedin.com/jobs/view \"quant researcher\" India",
-        "site:linkedin.com/jobs/view \"data scientist\" India",
-        "site:linkedin.com/jobs/view \"applied researcher\" India",
-        "site:indeed.com/viewjob \"quant researcher\" India",
-        "site:indeed.com/viewjob \"data scientist\" India",
-        "site:indeed.com/viewjob \"applied researcher\" India",
-        "site:boards.greenhouse.io python India",
+        "site:linkedin.com/jobs/view \"quant researcher\"",
+        "site:linkedin.com/jobs/view \"data scientist\"",
+        "site:linkedin.com/jobs/view \"applied researcher\"",
+        "site:indeed.com/viewjob \"quant researcher\"",
+        "site:indeed.com/viewjob \"data scientist\"",
+        "site:indeed.com/viewjob \"applied researcher\"",
+        "site:boards.greenhouse.io python",
         "site:lever.co quant researcher",
-        "site:reddit.com/r/cscareerquestionsIN \"hiring\" OR \"who is hiring\"",
+        "site:reddit.com/r/cscareerquestions \"hiring\" OR \"who is hiring\"",
         "site:reddit.com/r/quant \"hiring\" OR \"recruiters\""
     ],
     "headless": True,
@@ -108,10 +156,10 @@ def load_config() -> dict:
             logger.error(f"Error reading or parsing config.json: {e}")
             config = {}
             
-    # Check if critical lists/keys are missing or empty
+    # Check if critical lists/keys are missing
     modified = False
     for k, v in DEFAULT_CONFIG.items():
-        if k not in config or (isinstance(v, list) and not config[k]) or (isinstance(v, dict) and not config[k]):
+        if k not in config:
             config[k] = v
             modified = True
             
@@ -159,34 +207,18 @@ async def get_jobs_for_date(date: str):
     summary = ""
     
     if date == "all":
-        # Aggregate unique jobs from all daily folders
-        data_dir = "data"
-        seen_urls = set()
-        if os.path.exists(data_dir):
-            folders = [item for item in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, item))]
-            # Sort descending (latest dates first)
-            folders.sort(reverse=True)
-            for folder in folders:
-                if len(folder) == 10 and folder[4] == '-' and folder[7] == '-':
-                    jobs_path = os.path.join(data_dir, folder, "jobs.json")
-                    if os.path.exists(jobs_path):
-                        try:
-                            with open(jobs_path, "r", encoding="utf-8") as f:
-                                date_jobs = json.load(f)
-                            for j in date_jobs:
-                                url = j.get("url")
-                                if url and url not in seen_urls:
-                                    seen_urls.add(url)
-                                    # Tag job with discovery date for UI context
-                                    if "found_date" not in j:
-                                        j["found_date"] = folder
-                                    jobs.append(j)
-                        except Exception as e:
-                            logger.error(f"Error loading jobs.json for date {folder}: {e}")
+        # Read the verified persistent all_jobs.json database
+        all_jobs_path = "data/all_jobs.json"
+        if os.path.exists(all_jobs_path):
+            try:
+                with open(all_jobs_path, "r", encoding="utf-8") as f:
+                    jobs = json.load(f)
+            except Exception as e:
+                logger.error(f"Error loading all_jobs.json: {e}")
                             
         # Sort aggregated jobs by match score
         jobs.sort(key=lambda x: x.get("match_score", 0), reverse=True)
-        summary = "### Combined Job Search History\nShowing all unique job postings discovered across all previous scans."
+        summary = "### Combined Job Search History\nShowing all persistent, verified open job postings discovered across all previous scans."
     else:
         jobs_path = os.path.join("data", date, "jobs.json")
         summary_path = os.path.join("data", date, "summary.md")
@@ -416,9 +448,19 @@ async def get_scan_status():
 class CompaniesRequest(BaseModel):
     companies: List[str]
 
+@app.get("/api/master_companies")
+async def get_master_companies():
+    db_path = "data/companies_db.json"
+    if os.path.exists(db_path):
+        try:
+            with open(db_path, "r", encoding="utf-8") as f:
+                return {"companies": json.load(f)}
+        except Exception as e:
+            logger.error(f"Failed to read master companies DB: {e}")
+    return {"companies": []}
+
 @app.get("/api/companies")
-async def get_companies():
-    """Retrieve the list of target companies from config.json."""
+async def get_active_companies():
     config = load_config()
     return config.get("target_companies", [])
 

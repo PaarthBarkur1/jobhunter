@@ -137,6 +137,11 @@
             transition: all var(--transition-speed);
         }
 
+        select option {
+            background-color: #110d24;
+            color: var(--text-main);
+        }
+
         select:focus, input[type="text"]:focus {
             border-color: var(--primary);
             box-shadow: 0 0 10px var(--primary-glow);
@@ -755,8 +760,12 @@
             <div class="control-group" style="margin-top: 8px;">
                 <span class="section-label">Target Companies</span>
                 <div style="display: flex; flex-direction: column; gap: 6px; background: var(--glass-bg); padding: 8px; border: 1px solid var(--glass-border); border-radius: 10px;">
-                    <input type="text" id="new-company-input" placeholder="Company Name (e.g. eBay)" style="width: 100%; padding: 8px 10px; background: rgba(0, 0, 0, 0.2); border: 1px solid var(--glass-border); border-radius: 6px; color: var(--text-main); font-size: 0.8rem; outline: none; transition: border-color var(--transition-speed);">
-                    <input type="text" id="new-company-url-input" placeholder="Careers URL (Optional, e.g. https://jobs.ebayinc.com/)" style="width: 100%; padding: 8px 10px; background: rgba(0, 0, 0, 0.2); border: 1px solid var(--glass-border); border-radius: 6px; color: var(--text-main); font-size: 0.8rem; outline: none; transition: border-color var(--transition-speed);">
+                    <select id="master-company-select" style="width: 100%; padding: 8px 10px; background: rgba(0, 0, 0, 0.2); border: 1px solid var(--glass-border); border-radius: 6px; color: var(--text-main); font-size: 0.8rem; outline: none; margin-bottom: 6px;">
+                        <option value="">-- Select from Database --</option>
+                    </select>
+                    <div style="font-size: 0.75rem; text-align: center; color: var(--text-muted); margin-bottom: 6px;">OR ADD NEW:</div>
+                    <input type="text" id="new-company-input" placeholder="New Company Name (e.g. eBay)" style="width: 100%; padding: 8px 10px; background: rgba(0, 0, 0, 0.2); border: 1px solid var(--glass-border); border-radius: 6px; color: var(--text-main); font-size: 0.8rem; outline: none; transition: border-color var(--transition-speed);">
+                    <input type="text" id="new-company-url-input" placeholder="Careers URL (Required for new)" style="width: 100%; padding: 8px 10px; background: rgba(0, 0, 0, 0.2); border: 1px solid var(--glass-border); border-radius: 6px; color: var(--text-main); font-size: 0.8rem; outline: none; transition: border-color var(--transition-speed);">
                     <button class="btn" style="width: 100%; padding: 8px; border-radius: 6px; font-size: 0.8rem; box-shadow: none;" onclick="addTargetCompany()"><i class="fa-solid fa-plus"></i> Add Company</button>
                 </div>
                 <div id="companies-container" style="display: flex; flex-wrap: wrap; gap: 6px; max-height: 100px; overflow-y: auto; padding: 4px 0; margin-top: 4px;">
@@ -788,7 +797,7 @@
             <header>
                 <div class="header-title">
                     <h1 id="selected-date-title">Job Hunting Digest</h1>
-                    <p>Scouring local resumes, Google, Bing & Reddit, gated at >35 LPA</p>
+                    <p>Scouring local resumes, Google, Bing & Reddit, gated by target compensation</p>
                 </div>
                 <div>
                     <button class="btn btn-secondary" onclick="loadTrends()">
@@ -942,10 +951,10 @@
                 const prevVal = select.value;
                 select.innerHTML = "";
                 
-                // Add the "All Dates" option at the very beginning
+                // Add the "All Open Jobs" option at the very beginning
                 const allOpt = document.createElement("option");
                 allOpt.value = "all";
-                allOpt.textContent = "All Dates (Combined)";
+                allOpt.textContent = "All Open Jobs (Verified)";
                 select.appendChild(allOpt);
                 
                 dates.forEach(d => {
@@ -996,81 +1005,91 @@
         }
 
         // Render jobs feed to left column
-        function renderJobsList(jobs, date) {
-            const container = document.getElementById("job-list-content");
-            const countLabel = document.getElementById("job-count-label");
-            
-            countLabel.textContent = `${jobs.length} jobs found`;
-            
-            if (jobs.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <i class="fa-solid fa-triangle-exclamation"></i>
-                        <p>No job postings passed the salary gate or match evaluations today.</p>
-                    </div>
-                `;
-                return;
-            }
-            
-            // Sort by match score descending
-            jobs.sort((a, b) => (b.match_score || 0) - (a.match_score || 0));
-            
-            container.innerHTML = "";
-            jobs.forEach(job => {
-                const card = document.createElement("div");
-                card.className = "job-card";
-                
-                // Determine score bar color based on percentage
-                let colorClass = "var(--primary)";
-                if (job.match_score >= 85) colorClass = "var(--success)";
-                else if (job.match_score < 70) colorClass = "var(--warning)";
-                
-                const badgesHtml = `
-                    <div class="badges">
-                        <span class="badge badge-source">${job.source}</span>
-                        ${job.found_date ? `<span class="badge badge-date" style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa; padding: 4px 8px; border-radius: 6px; font-size: 0.75rem;"><i class="fa-regular fa-calendar"></i> ${job.found_date}</span>` : ''}
-                        ${job.is_curve_ball ? '<span class="badge badge-curve"><i class="fa-solid fa-fire"></i> Curve Ball</span>' : ''}
-                    </div>
-                `;
-                
-                card.innerHTML = `
-                    <div class="job-header">
-                        <div class="job-title-group">
-                            <h3>${job.title}</h3>
-                            <p>${job.company}</p>
-                        </div>
-                        ${badgesHtml}
-                    </div>
+        // Render jobs feed to left column
+                function renderJobsList(jobs, date) {
+                    const container = document.getElementById("job-list-content");
+                    const countLabel = document.getElementById("job-count-label");
                     
-                    <div class="job-meta-row">
-                        <span class="ctc"><i class="fa-solid fa-sack-dollar"></i> ~${job.ctc} LPA</span>
-                        <span><i class="fa-solid fa-graduation-cap"></i> ${job.experience_level}</span>
-                        ${job.location && job.location !== 'N/A' ? `<span><i class="fa-solid fa-location-dot"></i> ${job.location}</span>` : ''}
-                    </div>
+                    countLabel.textContent = `${jobs.length} jobs found`;
                     
-                    <div class="job-reasoning">
-                        <strong>Evaluation:</strong> ${job.match_reason}
-                        ${job.is_curve_ball && job.curve_ball_reason ? `<br><strong style="color:var(--secondary)">Why Curve Ball:</strong> ${job.curve_ball_reason}` : ''}
-                    </div>
-                    
-                    <div class="job-footer">
-                        <div style="display: flex; align-items: center;">
-                            <div class="match-score-bar-container">
-                                <div class="match-score-bar" style="width: ${job.match_score}%; background: ${colorClass};"></div>
+                    if (jobs.length === 0) {
+                        container.innerHTML = `
+                            <div class="empty-state">
+                                <i class="fa-solid fa-triangle-exclamation"></i>
+                                <p>No job postings passed the salary gate or match evaluations today.</p>
                             </div>
-                            <span class="match-percentage">${job.match_score}%</span>
-                        </div>
+                        `;
+                        return;
+                    }
+                    
+                    // Sort by match score descending (treat missing scores as 0)
+                    jobs.sort((a, b) => (b.match_score || 0) - (a.match_score || 0));
+                    
+                    container.innerHTML = "";
+                    jobs.forEach(job => {
+                        const card = document.createElement("div");
+                        card.className = "job-card";
                         
-                        <div class="job-actions">
-                            <a href="${job.url}" target="_blank" class="action-icon" title="Open Job Posting"><i class="fa-solid fa-arrow-up-right-from-square"></i></a>
-                            <button class="action-icon ${job.status === 'thumbs_up' ? 'rated-up' : ''}" onclick="openFeedbackModal('${date}', '${job.id}', 'thumbs_up')" title="Thumbs Up (Add to likes)"><i class="fa-solid fa-thumbs-up"></i></button>
-                            <button class="action-icon ${job.status === 'thumbs_down' ? 'rated-down' : ''}" onclick="openFeedbackModal('${date}', '${job.id}', 'thumbs_down')" title="Thumbs Down (Reject & specify why)"><i class="fa-solid fa-thumbs-down"></i></button>
-                        </div>
-                    </div>
-                `;
-                container.appendChild(card);
-            });
-        }
+                        // --- SAFE FALLBACKS FOR INTERMEDIATE SCANNING STATES ---
+                        const safeScore = job.match_score || 0;
+                        const safeCTC = job.ctc !== undefined ? job.ctc : 0.0;
+                        const safeLoc = job.location && job.location !== 'undefined' ? job.location : 'Pending...';
+                        const safeExp = job.experience_level && job.experience_level !== 'undefined' ? job.experience_level : 'Pending...';
+                        const safeReason = job.match_reason && job.match_reason !== 'undefined' ? job.match_reason : '⏳ AI has queued this job for deep evaluation. Waiting for details...';
+                        const safeId = job.id || '';
+                        
+                        // Determine score bar color based on percentage
+                        let colorClass = "var(--primary)";
+                        if (safeScore >= 85) colorClass = "var(--success)";
+                        else if (safeScore > 0 && safeScore < 70) colorClass = "var(--warning)";
+                        else if (safeScore === 0) colorClass = "var(--glass-border)"; // Grey if unrated
+                        
+                        const badgesHtml = `
+                            <div class="badges">
+                                <span class="badge badge-source">${job.source || 'Web Search'}</span>
+                                ${job.found_date ? `<span class="badge badge-date" style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa; padding: 4px 8px; border-radius: 6px; font-size: 0.75rem;"><i class="fa-regular fa-calendar"></i> ${job.found_date}</span>` : ''}
+                                ${job.is_curve_ball ? '<span class="badge badge-curve"><i class="fa-solid fa-fire"></i> Curve Ball</span>' : ''}
+                            </div>
+                        `;
+                        
+                        card.innerHTML = `
+                            <div class="job-header">
+                                <div class="job-title-group">
+                                    <h3>${job.title || 'Unknown Title'}</h3>
+                                    <p>${job.company || 'Unknown Company'}</p>
+                                </div>
+                                ${badgesHtml}
+                            </div>
+                            
+                            <div class="job-meta-row">
+                                <span class="ctc"><i class="fa-solid fa-sack-dollar"></i> ~${safeCTC}</span>
+                                <span><i class="fa-solid fa-graduation-cap"></i> ${safeExp}</span>
+                                ${safeLoc !== 'N/A' ? `<span><i class="fa-solid fa-location-dot"></i> ${safeLoc}</span>` : ''}
+                            </div>
+                            
+                            <div class="job-reasoning" style="${!job.match_reason ? 'opacity: 0.7; font-style: italic;' : ''}">
+                                <strong>Evaluation:</strong> ${safeReason}
+                                ${job.is_curve_ball && job.curve_ball_reason ? `<br><strong style="color:var(--secondary)">Why Curve Ball:</strong> ${job.curve_ball_reason}` : ''}
+                            </div>
+                            
+                            <div class="job-footer">
+                                <div style="display: flex; align-items: center;">
+                                    <div class="match-score-bar-container">
+                                        <div class="match-score-bar" style="width: ${safeScore}%; background: ${colorClass};"></div>
+                                    </div>
+                                    <span class="match-percentage">${safeScore}%</span>
+                                </div>
+                                
+                                <div class="job-actions">
+                                    <a href="${job.url}" target="_blank" class="action-icon" title="Open Job Posting"><i class="fa-solid fa-arrow-up-right-from-square"></i></a>
+                                    <button class="action-icon ${job.status === 'thumbs_up' ? 'rated-up' : ''}" onclick="openFeedbackModal('${date}', '${safeId}', 'thumbs_up')" ${!safeId ? 'disabled style="opacity:0.3;"' : ''} title="Thumbs Up (Add to likes)"><i class="fa-solid fa-thumbs-up"></i></button>
+                                    <button class="action-icon ${job.status === 'thumbs_down' ? 'rated-down' : ''}" onclick="openFeedbackModal('${date}', '${safeId}', 'thumbs_down')" ${!safeId ? 'disabled style="opacity:0.3;"' : ''} title="Thumbs Down (Reject & specify why)"><i class="fa-solid fa-thumbs-down"></i></button>
+                                </div>
+                            </div>
+                        `;
+                        container.appendChild(card);
+                    });
+                }
 
         // Fetch aggregated trends
         async function loadTrends() {
@@ -1320,6 +1339,32 @@
                 const res = await fetch("/api/companies");
                 targetCompanies = await res.json();
                 renderCompanies();
+                
+                // Also load master DB for dropdown
+                const masterRes = await fetch("/api/master_companies");
+                const masterData = await masterRes.json();
+                const select = document.getElementById("master-company-select");
+                
+                // Clear existing except placeholder
+                while(select.options.length > 1) {
+                    select.remove(1);
+                }
+                
+                if (masterData.companies && masterData.companies.length > 0) {
+                    // Sort alphabetically
+                    masterData.companies.sort((a, b) => a.name.localeCompare(b.name));
+                    
+                    masterData.companies.forEach(companyObj => {
+                        // Only add if not already in targetCompanies
+                        const exists = targetCompanies.some(c => c.toLowerCase().trim() === companyObj.name.toLowerCase().trim());
+                        if (!exists) {
+                            const opt = document.createElement("option");
+                            opt.value = JSON.stringify(companyObj);
+                            opt.textContent = companyObj.name;
+                            select.appendChild(opt);
+                        }
+                    });
+                }
             } catch (err) {
                 console.error("Failed to load target companies: ", err);
             }
@@ -1374,46 +1419,67 @@
         }
 
         async function addTargetCompany() {
+            const select = document.getElementById("master-company-select");
             const input = document.getElementById("new-company-input");
             const urlInput = document.getElementById("new-company-url-input");
-            const name = input.value.trim();
-            const url = urlInput ? urlInput.value.trim() : "";
-            if (!name) return;
+            
+            let name = "";
+            let url = "";
+            
+            if (select.value) {
+                const selected = JSON.parse(select.value);
+                name = selected.name;
+                url = selected.url;
+            } else {
+                name = input.value.trim();
+                url = urlInput ? urlInput.value.trim() : "";
+            }
+            
+            if (!name) {
+                alert("Please select a company from the database or enter a new one.");
+                return;
+            }
             
             // Check if already in targetCompanies
             const exists = targetCompanies.some(c => c.toLowerCase().trim() === name.toLowerCase().trim());
+            if (exists) {
+                alert("Company already in active target list.");
+                return;
+            }
             
+            // Call the new backend endpoint which validates and adds to DB + targets
             if (url) {
                 try {
+                    const btn = document.querySelector("#companies-container").previousElementSibling.querySelector("button");
+                    const origHtml = btn.innerHTML;
+                    btn.disabled = true;
+                    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+                    
                     const res = await fetch("/api/career-pages", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ company: name, url: url })
                     });
+                    
                     const data = await res.json();
-                    if (data.status === "success") {
-                        if (!exists) {
-                            targetCompanies.push(name);
-                        }
+                    btn.disabled = false;
+                    btn.innerHTML = origHtml;
+                    
+                    if (res.ok && data.status === "success") {
                         urlInput.value = "";
                         input.value = "";
+                        select.value = "";
                         await loadCompanies();
-                        alert(`Successfully mapped and added ${name}!`);
+                        alert(`Successfully verified and added ${name}!`);
                     } else {
-                        alert(`Failed to save career page mapping: ${data.detail || 'unknown error'}`);
+                        alert(`Failed to add company: ${data.detail || 'unknown error'}`);
                     }
                 } catch (err) {
-                    console.error("Error saving career page mapping: ", err);
-                    alert("Error saving career page URL.");
+                    console.error("Error saving company mapping: ", err);
+                    alert("Error saving company URL.");
                 }
             } else {
-                if (exists) {
-                    alert("Company already added.");
-                    return;
-                }
-                targetCompanies.push(name);
-                input.value = "";
-                await saveCompanies();
+                alert("A Career URL is required when adding a new company so it can be navigated.");
             }
         }
 

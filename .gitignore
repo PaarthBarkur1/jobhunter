@@ -7,6 +7,7 @@
 .cache/
 .pip_temp/
 .remember/
+.scratch/
 
 # Python
 __pycache__/
@@ -45,8 +46,16 @@ wheels/
 scratch/
 *.test.md
 jobs_digest_test.md
+test_uber.py
+uber_screenshot.png
+uber_test.html
+
+# Generated run data (except master company DB)
+data/*
+!data/companies_db.json
 
 # Temporary files
 *.tmp
 *.temp
 .tmp/
+

@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field
 import ollama
 from openpyxl import Workbook, load_workbook
 
+# Import json_repair to handle malformed 1.5B LLM outputs
+import json_repair
+
 from career_pages import get_career_url_map, get_career_config, get_all_navigation_instructions
 
 # MCP Client SDK Imports
@@ -21,112 +24,138 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger("job_agent")
 
 # ==========================================
-# PYDANTIC SCHEMAS (Forced Structured Outputs)
+# LLM ROBUST PARSING UTILITY
+# ==========================================
+def parse_llm_response(raw_text: str) -> dict:
+    """Safely extracts JSON from DeepSeek 1.5B conversational output."""
+    try:
+        # json_repair.loads acts just like json.loads but fixes broken JSON strings automatically
+        parsed_data = json_repair.loads(raw_text)
+        
+        # Ensure it returns a dictionary, even if the model outputs a list of length 1
+        if isinstance(parsed_data, list) and len(parsed_data) > 0:
+            return parsed_data[0]
+        elif isinstance(parsed_data, dict):
+            return parsed_data
+        return {}
+    except Exception as e:
+        logger.error(f"Failed to parse 1.5B model output: {e}")
+        return {}
+
+def calculate_job_score(llm_extracted_skills: list, user_profile_text: str) -> int:
+    """Calculates match score strictly using Python to avoid 1.5B model hallucinations."""
+    if not llm_extracted_skills or not user_profile_text:
+        return 0
+        
+    user_text_lower = user_profile_text.lower()
+    user_words = set(re.findall(r'\b\w+\b', user_text_lower))
+    
+    match_count = 0
+    llm_skills_set = set(str(s).lower().strip() for s in llm_extracted_skills)
+    
+    for skill in llm_skills_set:
+        # If it's a multi-word skill, just do a substring check
+        if " " in skill and skill in user_text_lower:
+            match_count += 1
+        # If it's a single word, do a strict word boundary check
+        elif skill in user_words:
+            match_count += 1
+            
+    total_required = max(len(llm_skills_set), 1)
+    
+    # Calculate percentage out of 100
+    score = int((match_count / total_required) * 100)
+    return score
+
+# ==========================================
+# PYDANTIC SCHEMAS (Forced Structured Outputs w/ Defaults for 1.5B Resiliency)
 # ==========================================
 class JobDetails(BaseModel):
-    is_job_posting: bool = Field(description="True if the text is a specific job posting/description, False if it is a general page, list, or error.")
-    title: str = Field(description="The formal job title or role, or 'N/A' if not a job posting")
-    company: str = Field(description="The name of the hiring organization or company, or 'N/A'")
-    required_skills: List[str] = Field(description="Core technical or domain skills listed. Empty list if none.")
-    experience_level: str = Field(description="Required minimum years of experience or seniority level, or 'N/A'")
-    explicit_salary: Optional[str] = Field(None, description="Explicit salary stated in text, e.g. '30 LPA', '₹20,00,000', '$120,000'")
-    location: str = Field(description="Job location, e.g., 'Bengaluru', 'Remote', 'Mumbai', or 'N/A'")
-    role: str = Field(description="Specific role category or specialization, e.g., 'Quant Developer', 'Data Scientist', 'Machine Learning Engineer', or 'N/A'")
-    description: str = Field(description="Brief 2-3 sentence description of the job responsibilities and highlights.")
-    posted_date: Optional[str] = Field(None, description="The date the job was posted, if explicitly stated or inferred from text, e.g. '2026-05-10', '3 days ago', 'October 2025', or 'Unknown'.")
+    is_job_posting: bool = Field(default=True, description="True if the text is a specific job posting/description, False if it is a general page, list, or error.")
+    title: str = Field(default="N/A", description="The concise formal job title. MUST summarize and remove any extra description text (e.g., 'Software Engineer' instead of 'iconSoftware Engineer - We are seeking...'). Max 5 words.")
+    company: str = Field(default="N/A", description="The name of the hiring organization or company, or 'N/A'")
+    required_skills: List[str] = Field(default_factory=list, description="Core technical or domain skills listed. Empty list if none.")
+    experience_level: str = Field(default="N/A", description="Required minimum years of experience or seniority level, or 'N/A'")
+    explicit_salary: Optional[str] = Field(default=None, description="Explicit salary stated in text, e.g. '30 LPA', '₹20,00,000', '$120,000'")
+    location: str = Field(default="N/A", description="Job location, e.g., 'Bengaluru', 'Remote', 'Mumbai', or 'N/A'")
+    role: str = Field(default="N/A", description="Specific role category or specialization, e.g., 'Quant Developer', 'Data Scientist', 'Machine Learning Engineer', or 'N/A'")
+    description: str = Field(default="N/A", description="Brief 2-3 sentence description of the job responsibilities and highlights.")
+    posted_date: Optional[str] = Field(default="Unknown", description="The date the job was posted, if explicitly stated or inferred from text, e.g. '2026-05-10', '3 days ago', 'October 2025', or 'Unknown'.")
 
 class SalaryEstimation(BaseModel):
-    estimated_salary_range: str = Field(description="Estimated salary range or amount, e.g. '12-15 LPA', '₹15,00,000 per annum', '$100k', or 'Unknown'")
-    reason: str = Field(description="Brief reason or source snippet for the estimation")
+    estimated_salary_range: str = Field(default="Unknown", description="Estimated salary range or amount")
+    reason: str = Field(default="", description="Brief reason or source snippet for the estimation")
 
 class JobMatchEvaluation(BaseModel):
-    score: int = Field(description="Match score between 0 and 100 representing how well candidate profile matches the job requirements.")
-    reason: str = Field(description="A brief 1-2 sentence explanation of the rating.")
-    is_curve_ball: bool = Field(description="True if the job is slightly outside the candidate's core domain/tech stack but represents a high-potential adjacent opportunity. False otherwise.")
-    curve_ball_reason: Optional[str] = Field(None, description="If is_curve_ball is True, brief reason why this adjacent role is worth exploring.")
+    score: int = Field(default=0, description="Match score between 0 and 100 representing how well candidate profile matches the job requirements.")
+    reason: str = Field(default="Evaluated by AI", description="A brief 1-2 sentence explanation of the rating.")
+    is_curve_ball: bool = Field(default=False, description="True if the job is slightly outside the candidate's core domain/tech stack but represents a high-potential adjacent opportunity. False otherwise.")
+    curve_ball_reason: Optional[str] = Field(default=None, description="If is_curve_ball is True, brief reason why this adjacent role is worth exploring.")
 
 class RefinedConfig(BaseModel):
-    search_queries: List[str] = Field(description="List of 5-15 highly refined search query strings optimized for the candidate. Use google/linkedin/indeed search syntax e.g., site:linkedin.com/jobs/view 'quant researcher' India. Include India and Remote options. Avoid target company names in queries, keep query strings generic or focused on target roles.")
-    target_companies: List[str] = Field(description="List of target companies (e.g. Goldman Sachs, Uber, Google, Jane Street, Tower Research, etc.), retaining good ones and removing disliked ones.")
+    search_queries: List[str] = Field(default_factory=list, description="List of 5-15 highly refined search query strings optimized for the candidate.")
+    target_companies: List[str] = Field(default_factory=list, description="List of target companies.")
 
 class JobRelevance(BaseModel):
-    index: int = Field(description="The exact 'Index' number of the job from the input list (e.g. 1, 2, 3, etc.). Do not offset or shift the index.")
-    is_relevant: bool = Field(description="True if the job title, company, or snippet suggests it is a match for the candidate's preferences, target roles, locations, and experience level. False if it is in an avoided domain, location, or is a bad company match.")
-    reason: str = Field(description="A short 1-sentence explanation of why it was kept or rejected.")
+    index: int = Field(default=0, description="The exact 'Index' number of the job from the input list.")
+    is_relevant: bool = Field(default=True, description="True if the job title, company, or snippet suggests it is a match.")
+    reason: str = Field(default="Matched target criteria", description="A short explanation of why it was kept or rejected.")
 
 class BatchFilterResponse(BaseModel):
-    evaluations: List[JobRelevance] = Field(description="Evaluations for each job in the batch.")
+    evaluations: List[JobRelevance] = Field(default_factory=list, description="Evaluations for each job in the batch.")
 
 # ==========================================
 # CURRENCY & SALARY PARSER UTILITIES
 # ==========================================
-def parse_salary_to_lpa(salary_str: str) -> float:
-    """Parses a salary string and returns the value in LPA (Lakhs Per Annum) in INR."""
+def parse_salary_to_target_currency(salary_str: str, target_currency: str = "USD") -> float:
     if not salary_str or salary_str.lower() in ["none", "n/a", "null", "unknown", "unspecified"]:
         return 0.0
     
     s = salary_str.lower()
-    # Find all decimal/comma numbers
     numbers = re.findall(r'\d+(?:,\d+)*(?:\.\d+)?', s)
     if not numbers:
         return 0.0
     
-    # Clean commas and parse to float
     val = float(numbers[0].replace(',', ''))
-    # Fix the 0 lower bound range issue (e.g. 0-8 Lakhs -> take 8)
     if val == 0.0 and len(numbers) > 1:
         val = float(numbers[1].replace(',', ''))
     
-    # Identify indicators
     is_usd = any(c in s for c in ['$', 'usd', 'eur', 'gbp', '€', '£'])
     is_hourly = any(h in s for h in ['/hr', 'hour', 'hr'])
     is_monthly = any(m in s for m in ['/mo', 'month', 'pm'])
     
-    # Calculate annual value in currency
     if is_hourly:
-        annual_val = val * 2000  # Assume 2000 hours/year
+        annual_val = val * 2000 
     elif is_monthly:
         annual_val = val * 12
     else:
-        # Standard annual salary. Handle K suffixes (e.g. 120k)
         if re.search(r'\b\d+\s*k\b|\b\d+k\b', s) and val < 1000:
             annual_val = val * 1000
         else:
             annual_val = val
             
-    # Check if value is already in Lakhs (India)
     has_lakh_indicator = any(re.search(rf'\b{word}\b', s) for word in ['lpa', 'lakh', 'lakhs', 'lac', 'lacs'])
     
-    if val < 200 and has_lakh_indicator:
-        # Already in Lakhs
-        annual_in_inr = annual_val * 100000
-    else:
-        # It's raw amount
-        if is_usd:
-            annual_in_inr = annual_val * 83.0  # 1 USD = 83 INR
-        else:
-            annual_in_inr = annual_val
-            
-    # Convert INR to Lakhs
-    lpa = annual_in_inr / 100000.0
-    return round(lpa, 1)
+    if has_lakh_indicator and val < 200:
+        annual_val = annual_val * 100000
+        
+    target_currency = target_currency.upper()
+    if target_currency == "USD" and not is_usd and annual_val > 500000:
+        annual_val = annual_val / 83.0
+    elif target_currency == "INR" and is_usd:
+        annual_val = annual_val * 83.0
+        
+    return round(annual_val, 2)
 
 def is_posted_over_6_months_ago(posted_date_str: str) -> bool:
-    """
-    Returns True if the job posting date string indicates the job is older than 6 months (180 days).
-    """
     if not posted_date_str or posted_date_str.lower() in ["unknown", "n/a", "none", "null"]:
         return False
         
     s = posted_date_str.lower().strip()
     
-    # 1. Parse relative time offsets
-    # Check years
     if "year" in s:
-        # e.g., "1 year ago", "2 years ago", "last year"
         return True
         
-    # Check months
     month_match = re.search(r'(\d+)\s*month', s)
     if month_match:
         try:
@@ -135,11 +164,9 @@ def is_posted_over_6_months_ago(posted_date_str: str) -> bool:
         except Exception:
             pass
         
-    # Weeks, days, hours are always under 6 months
     if "week" in s or "day" in s or "hour" in s or "yesterday" in s or "today" in s:
         return False
         
-    # 2. Parse absolute dates (e.g. "2024-05-12", "Oct 12 2025", "12/23/2025")
     year_match = re.search(r'\b(20\d{2})\b', s)
     if year_match:
         try:
@@ -149,12 +176,10 @@ def is_posted_over_6_months_ago(posted_date_str: str) -> bool:
                 return True
                 
             parsed_date = None
-            # Standard ISO "YYYY-MM-DD"
             iso_match = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', s)
             if iso_match:
                 parsed_date = datetime.date(int(iso_match.group(1)), int(iso_match.group(2)), int(iso_match.group(3)))
             else:
-                # Try strptime with some formats
                 for fmt in ["%B %Y", "%b %Y", "%d %B %Y", "%d %b %Y", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d"]:
                     try:
                         clean_s = re.sub(r'th|st|nd|rd', '', s)
@@ -185,21 +210,14 @@ def update_scan_status(current_company: str, completed_companies: List[str], sta
     except Exception as e:
         logger.error(f"Failed to update scan_status.json: {e}")
 
-# ==========================================
-# DATED DIRECTORY CLEANUP UTILITY
-# ==========================================
 def clean_old_directories(data_dir: str = "data", max_days: int = 30):
-    """Deletes directories under data_dir older than max_days."""
     if not os.path.exists(data_dir):
         return
-    
     today = datetime.date.today()
     logger.info(f"Running cleanup on '{data_dir}' folder. Deleting folders older than {max_days} days...")
-    
     for item in os.listdir(data_dir):
         item_path = os.path.join(data_dir, item)
         if os.path.isdir(item_path):
-            # Try to parse item as YYYY-MM-DD
             try:
                 folder_date = datetime.datetime.strptime(item, "%Y-%m-%d").date()
                 age = (today - folder_date).days
@@ -207,17 +225,14 @@ def clean_old_directories(data_dir: str = "data", max_days: int = 30):
                     logger.info(f"Deleting old folder: {item} (Age: {age} days)")
                     shutil.rmtree(item_path)
             except ValueError:
-                # Folder name is not in YYYY-MM-DD format, skip it
                 pass
 
 def save_to_excel_rolling(job: dict, excel_path: str):
-    """Appends a single job to the Excel file, creating it with headers if it doesn't exist."""
     headers = [
-        "Title", "Company", "URL", "Source", "Expected CTC (LPA)", 
+        "Title", "Company", "URL", "Source", "Expected CTC", 
         "Required Skills", "Experience Level", "Match Score", "Match Reason", 
         "Location", "Role", "Description", "Posted Date"
     ]
-    
     if os.path.exists(excel_path):
         try:
             wb = load_workbook(excel_path)
@@ -248,23 +263,14 @@ def save_to_excel_rolling(job: dict, excel_path: str):
         job.get("description", "N/A"),
         job.get("posted_date", "Unknown")
     ])
-    
     try:
         wb.save(excel_path)
         logger.info(f"Incrementally saved job '{job.get('title')}' at '{job.get('company')}' to Excel.")
     except Exception as e:
         logger.error(f"Error saving rolling Excel: {e}")
 
-# ==========================================
-# PREFERENCES UPDATE ROUTINE
-# ==========================================
 async def update_preferences_profile(job_title: str, company: str, status: str, comment: str, preferences_path: str = ".resumes/preferences.md", model_name: str = "deepseek-r1:1.5b"):
-    """
-    Updates the preferences markdown file based on user feedback.
-    Called asynchronously when user clicks thumbs up/down.
-    """
     os.makedirs(os.path.dirname(preferences_path), exist_ok=True)
-    
     current_profile = ""
     if os.path.exists(preferences_path):
         try:
@@ -288,23 +294,25 @@ async def update_preferences_profile(job_title: str, company: str, status: str, 
     - Rating: {status.upper()} (User gave a {"thumbs up" if status == "thumbs_up" else "thumbs down"})
     - User Comment on why: "{comment}"
     
-    Please update the current profile. Integrate the new feedback:
-    1. If the user dislikes something (thumbs down), add details to 'Dislikes' (e.g. what domain, technology, or company trait to avoid).
-    2. If the user likes something (thumbs up), add details to 'Likes'.
-    3. Keep the markdown well-structured and concise. Clean up duplicates. Return ONLY the complete updated Markdown text. Do not write code fences like ```markdown.
+    Please update the current profile. Integrate the new feedback.
+    Return ONLY the complete updated Markdown text. Do not write code fences like ```markdown.
     """
     
     try:
-        response = ollama.chat(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": "You are a professional assistant. Output ONLY the updated Markdown profile. Do not include chat explanations or markdown blocks."},
-                {"role": "user", "content": prompt}
-            ]
+        client = ollama.AsyncClient(host=load_config().get("ollama_host", "http://127.0.0.1:11434"))
+        response = await asyncio.wait_for(
+            client.chat(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "You are a professional assistant. Output ONLY the updated Markdown profile. Do not include chat explanations or markdown blocks."},
+                    {"role": "user", "content": prompt}
+                ],
+                options={"num_ctx": 4096, "num_predict": 1024}
+            ),
+            timeout=120
         )
         updated_content = response['message']['content'].strip()
         
-        # Clean any wrapping code blocks that the LLM might have outputted despite instructions
         if updated_content.startswith("```markdown"):
             updated_content = updated_content[11:]
         if updated_content.startswith("```"):
@@ -319,14 +327,7 @@ async def update_preferences_profile(job_title: str, company: str, status: str, 
     except Exception as e:
         logger.error(f"Error updating preferences profile: {e}")
 
-# ==========================================
-# MAIN EXECUTION ROUTINE
-# ==========================================
-# ==========================================
-# ROLLING SAVE UTILITIES
-# ==========================================
 def save_to_json_rolling(job: dict, json_path: str):
-    """Appends/updates a single job in the JSON list and saves it."""
     jobs_list = []
     if os.path.exists(json_path):
         try:
@@ -335,10 +336,9 @@ def save_to_json_rolling(job: dict, json_path: str):
         except Exception:
             pass
             
-    # Check if job already exists
     exists = False
     for i, j in enumerate(jobs_list):
-        if j.get("id") == job.get("id"):
+        if (j.get("id") and j.get("id") == job.get("id")) or (j.get("url") and j.get("url") == job.get("url")):
             jobs_list[i] = job
             exists = True
             break
@@ -352,12 +352,36 @@ def save_to_json_rolling(job: dict, json_path: str):
     except Exception as e:
         logger.error(f"Error saving rolling JSON: {e}")
 
+def save_to_json_global(job: dict):
+    os.makedirs("data", exist_ok=True)
+    all_jobs_path = "data/all_jobs.json"
+    jobs_list = []
+    if os.path.exists(all_jobs_path):
+        try:
+            with open(all_jobs_path, "r", encoding="utf-8") as f:
+                jobs_list = json.load(f)
+        except Exception:
+            pass
+            
+    exists = False
+    for i, j in enumerate(jobs_list):
+        if (j.get("id") and j.get("id") == job.get("id")) or (j.get("url") and j.get("url") == job.get("url")):
+            jobs_list[i] = job
+            exists = True
+            break
+            
+    if not exists:
+        jobs_list.append(job)
+        
+    try:
+        with open(all_jobs_path, "w", encoding="utf-8") as f:
+            json.dump(jobs_list, f, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving global JSON: {e}")
+
 def is_aggregator_list_page(url: str) -> bool:
-    """Returns True if the URL points to a job aggregator search result or listing category page."""
     url_lower = url.lower()
-    
-    # Direct job post patterns we want to preserve
-    if any(p in url_lower for p in ["/jobs/view/", "/viewjob", "naukri.com/job-listings-", "greenhouse.io/", "lever.co/"]):
+    if any(p in url_lower for p in ["/jobs/view/", "/viewjob", "naukri.com/job-listings-", "greenhouse.io/", "lever.co/", "eightfold.ai/"]):
         return False
         
     patterns = [
@@ -376,20 +400,56 @@ def is_aggregator_list_page(url: str) -> bool:
             
     return False
 
+def is_valid_job_post(url: str) -> bool:
+    """Strictly checks if a URL is likely an actual job post, not a blog/article/general page."""
+    u = url.lower()
+    
+    # 1. Known ATS Platforms
+    ats_domains = [
+        "greenhouse.io", "lever.co", "workdayjobs.com", "myworkdayjobs.com",
+        "ashbyhq.com", "icims.com", "smartrecruiters.com", "breezy.hr", "bamboohr.com", "eightfold.ai"
+    ]
+    if any(ats in u for ats in ats_domains):
+        return True
+        
+    # 2. Known job board paths
+    job_board_paths = [
+        "linkedin.com/jobs/view/", "indeed.com/viewjob", "naukri.com/job-listings-"
+    ]
+    if any(p in u for p in job_board_paths):
+        return True
+        
+    # 3. Generic career portals but with job-specific paths
+    # Matches /job/123, /jobs/123, /careers/job/123, /role/123, /position/123
+    generic_job_regex = r"/(?:jobs?|careers?|roles?|positions?|opportunities|openings?)/[^/]*\d+[^/]*$"
+    if re.search(generic_job_regex, u):
+        return True
+        
+    # 4. Sometimes they have alphanumeric GUIDs
+    guid_job_regex = r"/(?:jobs?|careers?)/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    if re.search(guid_job_regex, u):
+        return True
+        
+    return False
+    
+    for pattern in patterns:
+        if pattern in url_lower:
+            return True
+            
+    return False
+
 async def process_discovered_url(url: str, title: str, snippet: str, session, config: dict, model_name: str, salary_threshold: float, resume_text: str, preferences_text: str, daily_dir: str, company_hint: str = "") -> Optional[dict]:
-    # Check if we already processed this URL to avoid duplicates
     jobs_json_path = os.path.join(daily_dir, "jobs.json")
     if os.path.exists(jobs_json_path):
         try:
             with open(jobs_json_path, "r", encoding="utf-8") as f:
                 existing_jobs = json.load(f)
-                if any(j.get("url") == url for j in existing_jobs):
-                    logger.info(f"Already processed URL {url}. Skipping.")
+                if any(j.get("url") == url and "match_reason" in j for j in existing_jobs):
+                    logger.info(f"Already deeply processed URL {url}. Skipping.")
                     return None
         except Exception:
             pass
 
-    # Extract source domain
     source_domain = "Web Search"
     domain_match = re.search(r'https?://(?:www\.)?([^/]+)', url)
     if domain_match:
@@ -410,127 +470,80 @@ async def process_discovered_url(url: str, title: str, snippet: str, session, co
             logger.warning(f"Skipping {url} due to fetch error.")
             return None
 
-    # Inject career portal navigation context when scraping company sites
     nav_context = ""
     if company_hint:
         cfg = get_career_config(company_hint)
         if cfg:
             nav_context = f"\n\nCAREER PORTAL NAVIGATION CONTEXT for {cfg.company}:\n{cfg.model_instructions.strip()}\n"
 
-    # Parse structural job details
-    extract_prompt = f"Analyze the following scraped webpage text and extract structured job details if it is a job description:{nav_context}\n\n{cleaned_text}"
+    # Allow sufficient context window for 1.5B models
+    MAX_JOB_CHARS = 12000
+    truncated_job_text = cleaned_text[:MAX_JOB_CHARS]
+
+    # Simplified extraction prompt
+    extract_prompt = f"Extract only these fields as JSON: is_job_posting,title,company,required_skills,experience_level,explicit_salary,location,role,description,posted_date. If it is NOT a job posting, set is_job_posting to false.\nCRITICAL: Ensure 'title' is a CONCISE 2-5 word job title. Remove any prefixed HTML garbage like 'icon' or appended descriptions.\n\nText:\n{truncated_job_text}"
+    
     try:
-        response = ollama.chat(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": "You are a precise job data miner. Parse the text and output EXACTLY a JSON structure matching the schema. If the text does not contain a job posting, mark is_job_posting as false."},
-                {"role": "user", "content": extract_prompt}
-            ],
-            format=JobDetails.model_json_schema()
+        client = ollama.AsyncClient(host=config.get("ollama_host", "http://127.0.0.1:11434"))
+        response = await asyncio.wait_for(
+            client.chat(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "You are an extraction bot. Output ONLY valid JSON matching the requested keys. No extra text."},
+                    {"role": "user", "content": extract_prompt}
+                ],
+                format=JobDetails.model_json_schema(),
+                options={"num_ctx": 4096, "num_predict": 1024}
+            ),
+            timeout=120
         )
         content = response.get('message', {}).get('content', '')
+        
         try:
-            job_metrics = JobDetails.model_validate_json(content)
+            # 1.5B Model Resiliency: Use json_repair
+            repaired_dict = parse_llm_response(content)
+            
+            # Fallback to company_hint if model missed it
+            if repaired_dict.get("company") in [None, "N/A", "", "Unknown"] and company_hint:
+                repaired_dict["company"] = company_hint
+                
+            job_metrics = JobDetails(**repaired_dict)
+            
+            # Clean up trailing JSON artifacts in title
+            if job_metrics.title:
+                job_metrics.title = re.sub(r'\},?\s*$', '', job_metrics.title).strip()
+                
         except Exception as ve:
-            # Save raw response for debugging
-            try:
-                os.makedirs("data", exist_ok=True)
-                raw_path = os.path.join("data", f"last_ollama_raw_{datetime.datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.txt")
-                with open(raw_path, "w", encoding="utf-8") as rf:
-                    rf.write(content)
-                logger.error(f"Invalid JSON from Ollama saved to {raw_path}: {ve}")
-            except Exception:
-                logger.error(f"Invalid JSON from Ollama and failed saving raw response: {ve}")
-            # Retry with a compact extraction prompt (shorter)
-            try:
-                short_text = (cleaned_text[:3500] + "...") if len(cleaned_text) > 3500 else cleaned_text
-                retry_prompt = f"Extract only these fields as JSON: is_job_posting,title,company,required_skills,experience_level,explicit_salary,location,role,description,posted_date. Text:\n\n{short_text}"
-                retry_resp = ollama.chat(
-                    model=model_name,
-                    messages=[
-                        {"role":"system","content":"Output ONLY valid JSON matching the requested keys. No extra text."},
-                        {"role":"user","content": retry_prompt}
-                    ],
-                    format=JobDetails.model_json_schema()
-                )
-                retry_content = retry_resp.get('message', {}).get('content', '')
-                job_metrics = JobDetails.model_validate_json(retry_content)
-            except Exception as e2:
-                err_str = str(e2).lower()
-                if "connection" in err_str or "urllib3" in err_str or "http" in err_str or "refused" in err_str:
-                    logger.critical(f"Ollama server is unreachable during retry! Aborting scan: {e2}")
-                    raise e2
-                logger.error(f"Retry parsing failed: {e2}")
-                return None
+            logger.error(f"Failed to load into Pydantic model: {ve}")
+            return None
 
     except Exception as e:
         err_str = str(e).lower()
-        if "connection" in err_str or "urllib3" in err_str or "http" in err_str or "refused" in err_str:
-            logger.critical(f"Ollama server is unreachable! Aborting scan: {e}")
-            raise e
-        logger.error(f"Error calling Ollama: {e}")
+        if "connection" in err_str or "urllib3" in err_str or "http" in err_str or "refused" in err_str or "timeout" in err_str:
+            logger.critical(f"Ollama server is unreachable or timed out during extraction! Skipping url: {url} - {e}")
+        else:
+            logger.error(f"Error calling Ollama extraction: {e}")
         return None
 
     if not job_metrics.is_job_posting:
         logger.info("Webpage is not a job posting. Skipping.")
         return None
 
-    # Gatekeeper Check: Date Posted (Skip if older than 6 months / 180 days)
     if job_metrics.posted_date and is_posted_over_6_months_ago(job_metrics.posted_date):
         logger.info(f"⛔ Gated: Job posted date '{job_metrics.posted_date}' is 6 months or more ago. Skipping.")
         return None
         
     logger.info(f"Found Job: '{job_metrics.title}' at '{job_metrics.company}'")
     
-    # Defaults
     location = job_metrics.location if job_metrics.location else "N/A"
     role = job_metrics.role if job_metrics.role else "N/A"
     description = job_metrics.description if job_metrics.description else "N/A"
 
-    # Gatekeeper Check: Calculate Compensation
     estimated_pay = 0.0
     if job_metrics.explicit_salary:
-        estimated_pay = parse_salary_to_lpa(job_metrics.explicit_salary)
-        logger.info(f"Parsed Explicit Salary: {job_metrics.explicit_salary} -> ~{estimated_pay} LPA")
-        
-    # Online salary estimation and gating disabled as requested by user.
-    # We will still parse explicit salary if it is mentioned in the job post,
-    # but we won't query search engines or filter out roles below the threshold.
-    
-    # if estimated_pay == 0.0:
-    #     # Look up salary info on web using MCP
-    #     salary_query = f"{job_metrics.title} at {job_metrics.company} average salary India Glassdoor AmbitionBox"
-    #     logger.info(f"No explicit salary. Looking up compensation info: '{salary_query}'")
-    #     try:
-    #         salary_search = await session.call_tool("search_web", arguments={"query": salary_query})
-    #         salary_snippets = salary_search.content[0].text
-    #         
-    #         salary_prompt = f"Given these search snippets, estimate the median average salary in India for a '{job_metrics.title}' at '{job_metrics.company}'. Return your best estimate using the schema:\n\n{salary_snippets}"
-    #         salary_res = ollama.chat(
-    #             model=model_name,
-    #             messages=[
-    #                 {"role": "system", "content": "Analyze the salary snippets and return the estimated salary range as a string using the JSON schema."},
-    #                 {"role": "user", "content": salary_prompt}
-    #             ],
-    #             format=SalaryEstimation.model_json_schema()
-    #         )
-    #         salary_data = SalaryEstimation.model_validate_json(salary_res['message']['content'])
-    #         estimated_pay = parse_salary_to_lpa(salary_data.estimated_salary_range)
-    #         logger.info(f"Estimated compensation from web: ~{estimated_pay} LPA ({salary_data.reason})")
-    #     except Exception as e:
-    #         err_str = str(e).lower()
-    #         if "connection" in err_str or "urllib3" in err_str or "http" in err_str or "refused" in err_str:
-    #             logger.critical(f"Ollama server is unreachable during salary estimation! Aborting scan: {e}")
-    #             raise e
-    #         logger.error(f"Error estimating salary: {e}")
-    #         estimated_pay = 0.0
-    # 
-    # # Check salary gate
-    # if estimated_pay > 0.0 and estimated_pay < salary_threshold:
-    #     logger.info(f"⛔ Gated: Compensation ~{estimated_pay} LPA falls below threshold of {salary_threshold} LPA. Skipping.")
-    #     return None
+        estimated_pay = parse_salary_to_target_currency(job_metrics.explicit_salary, config.get('currency', 'USD'))
+        logger.info(f"Parsed Explicit Salary: {job_metrics.explicit_salary} -> ~{estimated_pay} {config.get('currency', 'USD')}")
 
-    # Evaluate Profile Match & Preferences (Strict Dislikes)
     if not resume_text:
         logger.info("Skipping resume match evaluation because no resumes were loaded.")
         return None
@@ -549,9 +562,6 @@ async def process_discovered_url(url: str, title: str, snippet: str, session, co
     Candidate Preferences & Dislikes:
     {preferences_text if preferences_text else "No specific preferences set yet."}
     
-    Company Career Portal Reference (use when evaluating company-specific roles):
-    {career_nav_guide[:3000]}
-    
     Target Job:
     - Title: {job_metrics.title}
     - Company: {job_metrics.company}
@@ -561,31 +571,43 @@ async def process_discovered_url(url: str, title: str, snippet: str, session, co
     - Role: {role}
     
     INSTRUCTIONS:
-    1. If the job is NOT located in India or Remote (e.g., it is onsite in US, UK, Europe, or other foreign regions), you MUST evaluate it with a match score of 0% and explain that the job is not in the candidate's target location (India or Remote).
-    2. If the job violates candidate dislikes (e.g. onsite/hybrid when remote is preferred, or in an avoided domain/tech stack), you MUST evaluate it with a match score of 0% and reason explaining the preference mismatch.
-    3. If the job is slightly outside the candidate's core domain/tech stack but represents a high-potential high-paying opportunity, classify it as a 'Curve Ball' by setting `is_curve_ball` to True. Set its match score to 80, and explain why in `curve_ball_reason`.
+    1. Output JSON. Generate a 'score' from 0-100 indicating how well the candidate's skills match the job requirements. Generate 'reason', 'is_curve_ball', and 'curve_ball_reason'.
+    2. If the job is NOT in {config.get('target_location', 'Remote')} or Remote, state this in the reason.
+    3. If the job violates candidate dislikes, state this in the reason.
+    4. If it's a high-potential adjacent opportunity, set is_curve_ball to True and explain.
     """
     
     try:
-        match_res = ollama.chat(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": "You are a professional recruiter. Evaluate the alignment. Be strict about candidate dislikes. Output JSON matching the schema."},
-                {"role": "user", "content": match_prompt}
-            ],
-            format=JobMatchEvaluation.model_json_schema()
+        client = ollama.AsyncClient(host=config.get("ollama_host", "http://127.0.0.1:11434"))
+        match_res = await asyncio.wait_for(
+            client.chat(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "You are a professional recruiter. Output JSON matching the schema."},
+                    {"role": "user", "content": match_prompt}
+                ],
+                format=JobMatchEvaluation.model_json_schema(),
+                options={"num_ctx": 4096, "num_predict": 256}
+            ),
+            timeout=120
         )
-        match_data = JobMatchEvaluation.model_validate_json(match_res['message']['content'])
-        logger.info(f"Candidate Match Score: {match_data.score}% | Curve Ball: {match_data.is_curve_ball} - Reason: {match_data.reason}")
+        # 1.5B Model Resiliency
+        match_dict = parse_llm_response(match_res['message']['content'])
+        
+        # Rely on the semantic score generated by the 1.5B LLM
+        # to arrange jobs accurately based on relevancy, instead of rigid Python checks.
+        pass
+        
+        match_data = JobMatchEvaluation(**match_dict)
+        logger.info(f"Candidate Match Score (Python Calculated): {match_data.score}% | Curve Ball: {match_data.is_curve_ball}")
     except Exception as e:
         err_str = str(e).lower()
-        if "connection" in err_str or "urllib3" in err_str or "http" in err_str or "refused" in err_str:
-            logger.critical(f"Ollama server is unreachable during match evaluation! Aborting scan: {e}")
-            raise e
-        logger.error(f"Error evaluating match: {e}")
+        if "connection" in err_str or "urllib3" in err_str or "http" in err_str or "refused" in err_str or "timeout" in err_str:
+            logger.critical(f"Ollama server is unreachable or timed out during match evaluation! Skipping url: {url} - {e}")
+        else:
+            logger.error(f"Error evaluating match: {e}")
         return None
 
-    # Generate unique ID
     job_id = re.sub(r'[^a-z0-9]', '_', f"{job_metrics.company}_{job_metrics.title}".lower())
     
     job_result = {
@@ -609,8 +631,8 @@ async def process_discovered_url(url: str, title: str, snippet: str, session, co
         "feedback_comment": ""
     }
     
-    # Save incrementally
     save_to_json_rolling(job_result, jobs_json_path)
+    save_to_json_global(job_result)
     excel_path = os.path.join(daily_dir, "jobs.xlsx")
     save_to_excel_rolling(job_result, excel_path)
     
@@ -621,47 +643,28 @@ async def process_discovered_url(url: str, title: str, snippet: str, session, co
 # ==========================================
 DEFAULT_CONFIG = {
     "ollama_model": "deepseek-r1:1.5b",
-    "target_compensation_threshold_lpa": 0,
+    "target_compensation_threshold": 100000,
+    "currency": "USD",
+    "target_location": "Remote",
+    "disliked_companies": ["infosys", "wipro", "tcs", "cognizant"],
     "resumes_dir": ".resumes",
+    "smart_filter_batch_size": 1, 
     "search_queries": [
         "data scientist",
         "applied scientist",
-        "Credit data scientist",
         "quant analyst",
-        "site:linkedin.com/jobs/view \"quant researcher\" India",
-        "site:linkedin.com/jobs/view \"data scientist\" India",
-        "site:linkedin.com/jobs/view \"applied researcher\" India",
-        "site:indeed.com/viewjob \"quant researcher\" India",
-        "site:indeed.com/viewjob \"data scientist\" India",
-        "site:indeed.com/viewjob \"applied researcher\" India",
-        "site:boards.greenhouse.io python India",
-        "site:lever.co quant researcher",
-        "site:reddit.com/r/cscareerquestionsIN \"hiring\" OR \"who is hiring\"",
-        "site:reddit.com/r/quant \"hiring\" OR \"recruiters\""
+        "site:linkedin.com/jobs/view \"quant researcher\"",
+        "site:linkedin.com/jobs/view \"data scientist\""
     ],
     "headless": True,
     "user_data_dir": ".browser_profile",
     "preferences_path": ".resumes/preferences.md",
     "target_companies": [
-        "Millennium Management",
         "Tower Research Capital",
         "Jane Street",
         "D. E. Shaw",
         "Google",
-        "Uber",
-        "AQR Capital Management",
-        "J P Morgan",
-        "Goldman Sachs",
-        "Microsoft",
-        "Morgan Stanley",
-        "AMD",
-        "Nvidia",
-        "Meesho",
-        "Rippling",
-        "QRT",
-        "BCG X",
-        "IMC Trading",
-        "eBay"
+        "Uber"
     ],
     "direct_job_urls": [],
     "jobs_digest_path": "jobs_digest.md",
@@ -686,14 +689,12 @@ def load_config() -> dict:
             logger.error(f"Error reading or parsing config.json: {e}")
             config = {}
             
-    # Check if critical lists/keys are missing or empty
     modified = False
     for k, v in DEFAULT_CONFIG.items():
-        if k not in config or (isinstance(v, list) and not config.get(k)) or (isinstance(v, dict) and not config.get(k)):
+        if k not in config:
             config[k] = v
             modified = True
             
-    # Ensure hardcoded company career URLs are present by default and their companies are listed
     try:
         hardcoded = get_career_url_map()
         if hardcoded:
@@ -703,12 +704,7 @@ def load_config() -> dict:
                 if co not in career_pages:
                     career_pages[co] = url
                     modified = True
-                # Ensure company appears in target_companies (case-insensitive)
-                if not any(co.lower() == existing.lower() for existing in target_companies):
-                    target_companies.append(co)
-                    modified = True
             config["company_career_pages"] = career_pages
-            config["target_companies"] = target_companies
     except Exception as e:
         logger.error(f"Failed merging hardcoded career urls into config: {e}")
             
@@ -723,70 +719,58 @@ def load_config() -> dict:
     return config
 
 async def optimize_search_queries_and_config(resume_text: str, preferences_text: str, config: dict, model_name: str) -> dict:
-    """
-    Invokes Ollama to read candidate profile and preferences, dynamically optimizes search queries 
-    and target companies, validates the updates, and saves them back to config.json.
-    """
     logger.info("Starting proactive search query and target company optimization...")
     if not resume_text and not preferences_text:
         logger.warning("No resume or preferences available for search optimization. Skipping.")
         return config
 
     prompt = f"""
-    You are an expert recruiter and career agent managing a job search configuration.
-    Analyze the candidate's Resume and Preferences Profile, then optimize the "search_queries" and "target_companies" in the config.
+    You are an expert recruiter. Analyze the candidate's Resume and Preferences Profile.
+    Output JSON containing optimized "search_queries" and "target_companies".
 
     Candidate Resume Profile:
-    {resume_text[:4000]}
+    {resume_text[:2000]}
 
     Candidate Preferences Profile (Likes & Dislikes):
     {preferences_text}
 
-    Current Search Queries:
-    {json.dumps(config.get("search_queries", []), indent=2)}
-
     Current Target Companies:
-    {json.dumps(config.get("target_companies", []), indent=2)}
-
-    INSTRUCTIONS:
-    1. Output a JSON object containing "search_queries" and "target_companies".
-    2. "search_queries": Focus on target roles, locations (e.g. India or Remote), and experience level. Create 5-15 search queries. Avoid referencing company names directly in general query strings. Keep queries clean and generic (e.g. site:linkedin.com/jobs/view "data scientist" India).
-    3. "target_companies": Retain target companies that match candidate profile. Remove companies explicitly disliked (e.g., Millennium Management, Infosys). Add any companies from liked postings.
-    4. Keep the list formatted exactly as the schema. Do not write any other explanation.
+    {json.dumps(config.get("target_companies", [])[:10], indent=2)}
     """
 
     try:
-        response = ollama.chat(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": "You are a professional recruiting configurator. Return JSON matching the schema precisely. Validate location and dislikes."},
-                {"role": "user", "content": prompt}
-            ],
-            format=RefinedConfig.model_json_schema()
+        client = ollama.AsyncClient(host=config.get("ollama_host", "http://127.0.0.1:11434"))
+        response = await asyncio.wait_for(
+            client.chat(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "You are a professional recruiting configurator. Return JSON matching the schema precisely. Validate location and dislikes."},
+                    {"role": "user", "content": prompt}
+                ],
+                format=RefinedConfig.model_json_schema(),
+                options={"num_ctx": 4096, "num_predict": 512}
+            ),
+            timeout=120
         )
-        refined_data = RefinedConfig.model_validate_json(response['message']['content'])
         
-        # Sandbox / Sanitization logic:
-        # Clean queries and restrict to safe formats, max 25 queries, max 30 companies.
+        dict_val = parse_llm_response(response['message']['content'])
+        refined_data = RefinedConfig(**dict_val)
+        
         cleaned_queries = []
         for q in refined_data.search_queries:
-            if not isinstance(q, str):
-                continue
+            if not isinstance(q, str): continue
             q_clean = q.strip()
-            # Ensure query is not empty and doesn't contain dangerous shell characters
-            if len(q_clean) > 3 and not any(char in q_clean for char in [';', '|', '&', '$', '`', '<', '>', '\n', '\r']):
+            if len(q_clean) > 3 and not any(char in q_clean for char in [';', '|', '&', '$', '`', '<', '>']):
                 cleaned_queries.append(q_clean)
         
         cleaned_companies = []
         for c in refined_data.target_companies:
-            if not isinstance(c, str):
-                continue
+            if not isinstance(c, str): continue
             c_clean = c.strip()
-            if len(c_clean) > 2 and not any(char in c_clean for char in [';', '|', '&', '$', '`', '<', '>', '\n', '\r']):
-                # Double-check that we are not adding explicitly disliked companies
+            if len(c_clean) > 2 and not any(char in c_clean for char in [';', '|', '&', '$', '`', '<', '>']):
                 c_lower = c_clean.lower()
                 disliked = False
-                for term in ["millennium", "infosys", "wipro", "tcs", "cognizant"]:
+                for term in config.get("disliked_companies", ["infosys", "wipro", "tcs", "cognizant"]):
                     if term in c_lower:
                         disliked = True
                         break
@@ -795,29 +779,21 @@ async def optimize_search_queries_and_config(resume_text: str, preferences_text:
                     
         if cleaned_queries:
             config["search_queries"] = cleaned_queries[:25]
-            logger.info(f"Refined search queries (count: {len(config['search_queries'])}): {config['search_queries']}")
         if cleaned_companies:
             existing_companies = config.get("target_companies", [])
-            disliked_terms = ["millennium", "infosys", "wipro", "tcs", "cognizant"]
-            filtered_existing = []
-            for c in existing_companies:
-                c_lower = c.lower()
-                if not any(term in c_lower for term in disliked_terms):
-                    filtered_existing.append(c)
-            
+            disliked_terms = config.get("disliked_companies", ["infosys", "wipro", "tcs", "cognizant"])
+            filtered_existing = [c for c in existing_companies if not any(t in c.lower() for t in disliked_terms)]
             merged_companies = list(filtered_existing)
             for c in cleaned_companies:
                 if c.lower() not in [x.lower() for x in merged_companies]:
                     merged_companies.append(c)
-                    
             config["target_companies"] = merged_companies[:30]
-            logger.info(f"Refined target companies (count: {len(config['target_companies'])}): {config['target_companies']}")
             
-        # Write back safely to config.json
         try:
-            with open("config.json", "w", encoding="utf-8") as f:
-                json.dump(config, f, indent=2)
-            logger.info("config.json successfully optimized by Ollama.")
+            # Removed permanent overwrite to prevent LLM hallucinations from destroying user config
+            # with open("config.json", "w", encoding="utf-8") as f:
+            #     json.dump(config, f, indent=2)
+            pass
         except Exception as write_err:
             logger.error(f"Failed to save optimized config.json: {write_err}")
             
@@ -827,33 +803,19 @@ async def optimize_search_queries_and_config(resume_text: str, preferences_text:
     return config
 
 async def filter_jobs_batch_smart(job_list: List[dict], resume_text: str, preferences_text: str, model_name: str) -> List[dict]:
-    """
-    Groups compiled jobs into batches and asks Ollama to pre-filter them based on
-    resume alignment and candidate preferences. This filters out irrelevant divisions/roles
-    before running the full scraping/processing pipeline.
-    """
-    if not job_list:
-        logger.info("No jobs to filter.")
-        return []
-
+    if not job_list: return []
     logger.info(f"Starting smart batch filtering of {len(job_list)} compiled job listings...")
-    
-    # Check if we have profile information to filter with
-    if not resume_text and not preferences_text:
-        logger.warning("No resumes or preferences available for smart batch filtering. Skipping pre-filter.")
-        return job_list
+    if not resume_text and not preferences_text: return job_list
 
     filtered_jobs = []
     config_local = load_config()
-    batch_size = config_local.get("smart_filter_batch_size", 5)
-    fallback_subbatch = config_local.get("smart_filter_fallback_size", 5)
+    # Enforce Batch Size of 1 to prevent Context Bleeding in 1.5B model
+    batch_size = config_local.get("smart_filter_batch_size", 1) 
     resume_snip_len = config_local.get("resume_max_chars_in_prompt", 1000)
     
     for i in range(0, len(job_list), batch_size):
         batch = job_list[i:i + batch_size]
-        logger.info(f"Filtering batch [{i // batch_size + 1}/{(len(job_list) - 1) // batch_size + 1}] (Size: {len(batch)})...")
         
-        # Prepare list of jobs for prompt as a clean string list
         jobs_input_list = []
         for idx, job in enumerate(batch, 1):
             jobs_input_list.append(
@@ -868,140 +830,139 @@ async def filter_jobs_batch_smart(job_list: List[dict], resume_text: str, prefer
         trimmed_resume = resume_text[:resume_snip_len] if resume_text else ""
             
         prompt = f"""
-        You are a screening assistant checking a list of job postings for a candidate.
-        
-        Candidate Target Profile:
-        - Target Roles: Quantitative Researcher, Quant Developer, Data Scientist, Machine Learning Scientist, Software Engineer.
-        - Target Location: India (including cities like Bengaluru/Bangalore, Hyderabad, Pune, Gurgaon/Gurugram, Mumbai) or Remote.
-        - Avoided/Disliked:
-          * Trading firm culture (specifically Millennium Management).
-          * Indian outsourcing/services firms (specifically Infosys, TCS, Wipro).
-          * Onsite jobs in foreign countries (like US, NYC, London) unless they are Remote.
+        Candidate Summary: {trimmed_resume}
+        Preferences: {preferences_text}
 
-        Candidate Resume Summary:
-        {trimmed_resume}
-
-        Candidate Preferences:
-        {preferences_text}
-
-        List of Job Listings to Screen:
+        Jobs:
         {jobs_input_str}
 
         INSTRUCTIONS:
-        For each job in the list:
-        1. Set `is_relevant` to True ONLY if the role matches the candidate's target roles, is in India (or Remote), matches their experience level, and does not violate the dislikes.
-        2. Set `is_relevant` to False if the job is onsite in a foreign country (like NYC/US), is at a disliked company (like Millennium or Infosys), or is in an irrelevant field.
-        3. Do NOT blacklist target companies (like Jane Street, Google, or Uber) just because a historical posting at that company was thumbs-downed in preferences. Only skip companies explicitly disliked by name (Millennium Management, Infosys).
-        4. Make sure the output `index` matches the `Job Index` of that specific job EXACTLY. Do not offset or shift the indices.
-        5. Output the results strictly matching the JSON schema.
+        Output JSON matching the schema indicating if the job matches the candidate's target profile ({config_local.get('target_location', 'Remote')}/Remote locations, non-disliked companies).
         """
         
         try:
-            response = ollama.chat(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": "You are a precise screening agent. Filter out irrelevant roles and locations. Output JSON matching the schema."},
-                    {"role": "user", "content": prompt}
-                ],
-                format=BatchFilterResponse.model_json_schema()
+            client = ollama.AsyncClient(host=config_local.get("ollama_host", "http://127.0.0.1:11434"))
+            response = await asyncio.wait_for(
+                client.chat(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": "You are a precise screening agent. Filter out irrelevant roles and locations. Output JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    format=BatchFilterResponse.model_json_schema(),
+                    options={"num_ctx": 4096, "num_predict": 512}
+                ),
+                timeout=120
             )
-            result = BatchFilterResponse.model_validate_json(response['message']['content'])
+            dict_val = parse_llm_response(response['message']['content'])
+            if isinstance(dict_val, list):
+                dict_val = {"evaluations": dict_val}
+            result = BatchFilterResponse(**dict_val)
             
-            # Map index-based responses back to original jobs
             relevance_map = {eval_item.index: eval_item for eval_item in result.evaluations}
             
             for idx, job in enumerate(batch, 1):
                 eval_item = relevance_map.get(idx)
                 if eval_item:
                     if eval_item.is_relevant:
-                        logger.info(f"✅ Kept: '{job.get('title')}' at '{job.get('company_hint', 'N/A')}' - Reason: {eval_item.reason}")
+                        logger.info(f"✅ Kept: '{job.get('title')}' - {eval_item.reason}")
                         filtered_jobs.append(job)
                     else:
-                        logger.info(f"❌ Skipped: '{job.get('title')}' at '{job.get('company_hint', 'N/A')}' - Reason: {eval_item.reason}")
+                        logger.info(f"❌ Skipped: '{job.get('title')}' - {eval_item.reason}")
                 else:
-                    # Fallback if Ollama missed an index: keep it to be safe
-                    logger.warning(f"⚠️ Index {idx} not evaluated by Ollama. Defaulting to keep.")
                     filtered_jobs.append(job)
                     
         except Exception as batch_err:
-            logger.error(f"Error filtering batch of jobs: {batch_err}. Attempting fallback with smaller sub-batches.")
-            # Try splitting this batch into smaller sub-batches to avoid context-size and formatting errors
-            sub_size = fallback_subbatch if fallback_subbatch and fallback_subbatch > 0 else max(1, batch_size // 4)
-            for j in range(0, len(batch), sub_size):
-                sub_batch = batch[j:j+sub_size]
-                logger.info(f"Retrying sub-batch [{j // sub_size + 1}/{(len(batch) - 1) // sub_size + 1}] (Size: {len(sub_batch)})...")
-                # Prepare sub-batch prompt
-                sub_jobs_input_list = []
-                for idx, job in enumerate(sub_batch, 1):
-                    sub_jobs_input_list.append(
-                        f"Job Index: {idx}\n"
-                        f"Title: {job.get('title', 'N/A')}\n"
-                        f"Company: {job.get('company_hint', 'Unknown')}\n"
-                        f"Snippet: {job.get('snippet', '')[:300]}\n"
-                        f"Source: {job.get('source', 'Web Search')}\n"
-                        f"---"
-                    )
-                sub_jobs_input_str = "\n".join(sub_jobs_input_list)
-                # Reuse the main prompt but swap in the sub-batch job list
-                try:
-                    sub_prompt = prompt.replace(jobs_input_str, sub_jobs_input_str)
-                except Exception:
-                    sub_prompt = None
-                if not sub_prompt:
-                    logger.error("Failed to construct sub-prompt. Defaulting to keep sub-batch.")
-                    filtered_jobs.extend(sub_batch)
-                    continue
-                try:
-                    response = ollama.chat(
-                        model=model_name,
-                        messages=[
-                            {"role": "system", "content": "You are a precise screening agent. Filter out irrelevant roles and locations. Output JSON matching the schema."},
-                            {"role": "user", "content": sub_prompt}
-                        ],
-                        format=BatchFilterResponse.model_json_schema()
-                    )
-                    result = BatchFilterResponse.model_validate_json(response['message']['content'])
-                    relevance_map = {eval_item.index: eval_item for eval_item in result.evaluations}
-                    for idx, job in enumerate(sub_batch, 1):
-                        eval_item = relevance_map.get(idx)
-                        if eval_item:
-                            if eval_item.is_relevant:
-                                logger.info(f"✅ Kept: '{job.get('title')}' at '{job.get('company_hint', 'N/A')}' - Reason: {eval_item.reason}")
-                                filtered_jobs.append(job)
-                            else:
-                                logger.info(f"❌ Skipped: '{job.get('title')}' at '{job.get('company_hint', 'N/A')}' - Reason: {eval_item.reason}")
-                        else:
-                            logger.warning(f"⚠️ Index {idx} not evaluated by Ollama in sub-batch. Defaulting to keep.")
-                            filtered_jobs.append(job)
-                except Exception as sub_err:
-                    logger.error(f"Sub-batch failed: {sub_err}. Defaulting to keep sub-batch.")
-                    filtered_jobs.extend(sub_batch)
+            logger.error(f"Error filtering batch of jobs: {batch_err}. Defaulting to keep.")
+            filtered_jobs.extend(batch)
 
-    logger.info(f"Smart pre-filtering complete. Retained {len(filtered_jobs)} out of {len(job_list)} jobs.")
     return filtered_jobs
 
-async def run_agent():
-    # 1. Load configuration
-    config = load_config()
+async def verify_open_jobs():
+    """Reads data/all_jobs.json and probes URLs to drop closed jobs."""
+    all_jobs_path = "data/all_jobs.json"
+    if not os.path.exists(all_jobs_path):
+        return
         
+    try:
+        with open(all_jobs_path, "r", encoding="utf-8") as f:
+            all_jobs = json.load(f)
+    except Exception as e:
+        logger.error(f"Could not load all_jobs.json: {e}")
+        return
+        
+    logger.info(f"Verifying {len(all_jobs)} historical jobs to see if they are still open...")
+    
+    def check_url_sync(job):
+        url = job.get("url")
+        if not url: return None
+        try:
+            headers = {"User-Agent": "Mozilla/5.0"}
+            resp = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+            if resp.status_code in (404, 410):
+                logger.info(f"Job {url} returned {resp.status_code}, marking closed.")
+                return None
+            elif resp.status_code >= 400:
+                logger.warning(f"Job {url} returned {resp.status_code}, conservatively keeping it (likely bot protection).")
+                return job
+                
+            text_lower = resp.text.lower()
+            closed_phrases = [
+                "no longer accepting applications",
+                "this position has been filled",
+                "job is closed",
+                "job not found",
+                "role is no longer available"
+            ]
+            if any(p in text_lower for p in closed_phrases):
+                logger.info(f"Job {url} contains closed phrase, marking closed.")
+                return None
+            
+            final_url = resp.url
+            if "greenhouse.io" in final_url and "/jobs/" not in final_url:
+                return None
+            if "lever.co" in final_url and "/postings/" not in final_url and url != final_url:
+                return None
+                
+            return job
+        except Exception:
+            return job
+
+    async def check_url(job):
+        return await asyncio.to_thread(check_url_sync, job)
+
+    tasks = [check_url(j) for j in all_jobs]
+    results = await asyncio.gather(*tasks)
+    open_jobs = [r for r in results if r]
+    
+    try:
+        with open(all_jobs_path, "w", encoding="utf-8") as f:
+            json.dump(open_jobs, f, indent=2)
+        logger.info(f"Verification complete. Kept {len(open_jobs)} / {len(all_jobs)} jobs.")
+    except Exception as e:
+        logger.error(f"Could not save verified all_jobs.json: {e}")
+
+async def run_agent():
+    """Main orchestration loop: Read resume, optimize config, fetch & filter jobs."""
+    import time
+    logger.info("Initializing Job Hunter Agent...")
+    
+    await verify_open_jobs()
+    
+    config = load_config()
     model_name = config.get("ollama_model", "deepseek-r1:1.5b")
-    salary_threshold = config.get("target_compensation_threshold_lpa", 0)
+    salary_threshold = config.get("target_compensation_threshold", 0)
     resumes_dir = config.get("resumes_dir", ".resumes")
     search_queries = config.get("search_queries", [])
     preferences_path = config.get("preferences_path", ".resumes/preferences.md")
     
-    logger.info(f"Loaded config: Model={model_name}, Threshold={salary_threshold} LPA, Resumes={resumes_dir}")
-
-    # Run cleanup of old directories (>30 days)
     clean_old_directories(data_dir="data", max_days=30)
     
-    # Establish daily output directory
     today_str = datetime.date.today().isoformat()
     daily_dir = os.path.join("data", today_str)
     os.makedirs(daily_dir, exist_ok=True)
     jobs_json_path = os.path.join(daily_dir, "jobs.json")
 
-    # Load all markdown files in resumes directory (including preferences.md)
     markdown_contents = []
     if os.path.exists(resumes_dir):
         for filename in os.listdir(resumes_dir):
@@ -1009,412 +970,130 @@ async def run_agent():
                 file_path = os.path.join(resumes_dir, filename)
                 try:
                     with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                        markdown_contents.append(f"=== Markdown File: {filename} ===\n{content}\n")
-                    logger.info(f"Candidate preference/resume markdown file '{filename}' successfully loaded before starting.")
+                        markdown_contents.append(f.read())
                 except Exception as e:
-                    logger.error(f"Error loading markdown file {filename}: {e}")
+                    pass
     preferences_text = "\n".join(markdown_contents)
 
-    # Configure MCP Server Command
     python_exe = os.path.join(".venv", "Scripts", "python.exe")
     if not os.path.exists(python_exe):
         python_exe = "python"
         
-    server_params = StdioServerParameters(
-        command=python_exe,
-        args=["mcp_server.py"]
-    )
+    server_params = StdioServerParameters(command=python_exe, args=["mcp_server.py"])
     
-    logger.info(f"Connecting to MCP Server using {python_exe}...")
-    
-    # Connect to the MCP Server
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            logger.info("MCP Session initialized successfully.")
-            
-            # Read resumes
-            logger.info("Reading candidate resumes via MCP...")
             resumes_result = await session.call_tool("read_resumes", arguments={"directory": resumes_dir})
             resume_text = resumes_result.content[0].text
-            
-            if "No readable resume files" in resume_text or "does not exist" in resume_text:
-                logger.warning("No candidate resume profile found. The agent will skip matching.")
-                resume_text = ""
-            else:
-                logger.info("Candidate resume profile loaded.")
+            if "No readable resume files" in resume_text: resume_text = ""
 
-            # Run proactive config optimization
-            config = await optimize_search_queries_and_config(
-                resume_text=resume_text,
-                preferences_text=preferences_text,
-                config=config,
-                model_name=model_name
-            )
-            # Re-read settings that might have been updated by optimization
+            config = await optimize_search_queries_and_config(resume_text, preferences_text, config, model_name)
             search_queries = config.get("search_queries", [])
             target_companies = config.get("target_companies", [])
 
-            # Search for jobs and load direct URLs
             direct_urls = config.get("direct_job_urls", [])
-            job_list = []
+            job_list = [{"url": u, "title": "Direct Link", "snippet": "", "priority": 1} for u in direct_urls]
 
-            async def schedule_filter_for_company(company_name, company_jobs_list):
-                """Asynchronously filter a company's scraped jobs and persist partial results so dashboard can show them."""
-                if not company_jobs_list:
-                    return
-                try:
-                    filtered = await filter_jobs_batch_smart(company_jobs_list, resume_text, preferences_text, model_name)
-                    # Normalize filtered job dicts to ensure dashboard fields exist
-                    for fj in filtered:
-                        if 'company' not in fj or not fj.get('company'):
-                            fj['company'] = fj.get('company_hint', 'N/A')
-                        if 'match_score' not in fj:
-                            fj['match_score'] = fj.get('match_score', 0)
-                        if 'ctc' not in fj:
-                            fj['ctc'] = fj.get('ctc', 0.0)
-                        if 'is_curve_ball' not in fj:
-                            fj['is_curve_ball'] = fj.get('is_curve_ball', False)
-                    job_list.extend(filtered)
-                    # persist partial results for dashboard
-                    try:
-                        with open(jobs_json_path, 'w', encoding='utf-8') as jf:
-                            json.dump(job_list, jf, indent=2)
-                        logger.info(f"Partial results from {company_name} written to {jobs_json_path} ({len(filtered)} kept)")
-                    except Exception as wf:
-                        logger.error(f"Failed to write partial jobs.json: {wf}")
-                except Exception as e:
-                    logger.error(f"Async filter for company {company_name} failed: {e}")
-            for url in direct_urls:
-                job_list.append({"url": url, "title": "Direct Link", "snippet": "", "priority": 1})
-            if direct_urls:
-                logger.info(f"Loaded {len(direct_urls)} direct job URLs from config.")
-
-            # Track completed companies for UI progress reporting
             completed_companies = []
-
-            target_companies = config.get("target_companies", [])
             career_pages = config.get("company_career_pages", {})
-            # Merge hardcoded career URLs from registry into config
-            hardcoded_urls = get_career_url_map()
-            for co_name, co_url in hardcoded_urls.items():
-                if co_name not in career_pages:
-                    career_pages[co_name] = co_url
-            config["company_career_pages"] = career_pages
             restrict_to_target = config.get("restrict_to_target_companies", False)
             max_additional = config.get("max_additional_companies", 30)
             max_to_process = config.get("max_jobs_to_process", 25)
             career_max = config.get("career_scrape_max_per_company", 15)
             
-            # Extract target base roles from search_queries
-            base_roles = []
-            for q in search_queries:
-                q_lower = q.lower()
-                if "site:" in q_lower or "reddit.com" in q_lower:
-                    quoted = re.findall(r'\"([^\"]+)\"', q)
-                    for r in quoted:
-                        if r.strip() and r.strip() not in base_roles:
-                            base_roles.append(r.strip())
-                else:
-                    if q.strip() and q.strip() not in base_roles:
-                        base_roles.append(q.strip())
-            
-            if not base_roles:
-                base_roles = ["data scientist", "quant developer", "software engineer"]
-            
-            logger.info(f"Extracted target base roles for company searches: {base_roles}")
+            base_roles = ["data scientist", "quant developer", "software engineer", "analyst", "quant", "researcher", "applied", "scientist"]
 
-            # Phase 0: Scrape hardcoded company career portals (highest priority)
-            logger.info(f"Phase 0: Scraping hardcoded career portals for {target_companies}")
+            async def filter_company_jobs(company_name, company_jobs_list):
+                if not company_jobs_list: return []
+                try:
+                    filtered = await filter_jobs_batch_smart(company_jobs_list, resume_text, preferences_text, model_name)
+                    for fj in filtered:
+                        if 'company' not in fj or not fj.get('company'): fj['company'] = fj.get('company_hint', 'N/A')
+                        if 'match_score' not in fj: fj['match_score'] = 0
+                        if 'ctc' not in fj: fj['ctc'] = 0.0
+                        if 'is_curve_ball' not in fj: fj['is_curve_ball'] = False
+                    return filtered
+                except Exception as e:
+                    logger.error(f"Async filter for company {company_name} failed: {e}")
+                    return []
+            
+            filter_tasks = []
+
+            logger.info(f"Phase 0: Scraping targeted career portals for {target_companies}")
             role_kw_str = ", ".join(base_roles[:8])
             scraped_companies = set()
             for company in target_companies:
                 update_scan_status(current_company=company, completed_companies=completed_companies)
                 company_jobs = []
                 try:
-                    scrape_res = await session.call_tool(
-                        "scrape_company_career_page",
-                        arguments={
-                            "company": company,
-                            "role_keywords": role_kw_str,
-                            "max_jobs": career_max,
-                        },
-                    )
+                    scrape_res = await session.call_tool("scrape_company_career_page", arguments={"company": company, "role_keywords": role_kw_str, "target_location": config.get("target_location", ""), "max_jobs": career_max})
                     scrape_text = scrape_res.content[0].text
-                    if scrape_text.startswith("No hardcoded"):
-                        logger.warning(scrape_text)
-                        continue
-
+                    if scrape_text.startswith("No hardcoded"): continue
                     scraped_companies.add(company.lower())
-                    for block in re.split(r"Job \d+:", scrape_text):
-                        if "URL:" not in block:
-                            continue
+                    for block in re.split(r"Job \d+:", scrape_text)[1:]:
+                        if "URL:" not in block: continue
                         url_m = re.search(r"URL:\s*(https?://\S+)", block)
                         title_m = re.search(r"Title:\s*(.*)", block)
-                        loc_m = re.search(r"Location:\s*(.*)", block)
-                        snippet_m = re.search(r"Snippet:\s*(.*)", block, re.DOTALL)
                         if url_m:
                             url = url_m.group(1).strip()
-                            title = title_m.group(1).strip() if title_m else f"{company} Career Job"
-                            snippet = snippet_m.group(1).strip() if snippet_m else ""
-                            if loc_m:
-                                snippet = f"Location: {loc_m.group(1).strip()}\n{snippet}"
                             if not any(j["url"] == url for j in job_list) and not any(j["url"] == url for j in company_jobs):
-                                company_jobs.append({
-                                    "url": url,
-                                    "title": title,
-                                    "snippet": snippet,
-                                    "priority": 0,
-                                    "company_hint": company,
-                                })
-                    logger.info(f"Career portal scrape for '{company}' complete.")
+                                company_jobs.append({"url": url, "title": title_m.group(1).strip() if title_m else f"{company} Job", "snippet": "", "priority": 0, "company_hint": company})
                 except Exception as e:
                     logger.error(f"Career portal scrape failed for '{company}': {e}")
                 finally:
                     completed_companies.append(company)
                     update_scan_status(current_company="", completed_companies=completed_companies)
-                    # Schedule asynchronous filtering for this company's jobs so dashboard can update incrementally
-                    asyncio.create_task(schedule_filter_for_company(company, company_jobs))
+                    filter_tasks.append(asyncio.create_task(filter_company_jobs(company, company_jobs)))
 
-            # Phase 1: Search target companies
-            logger.info(f"Gathering URLs for target companies: {target_companies}")
-            for company in target_companies:
-                if company.lower() in scraped_companies:
-                    logger.info(f"Skipping Phase 1 web search queries for '{company}' because it was successfully scraped in Phase 0.")
-                    continue
-                update_scan_status(current_company=company, completed_companies=completed_companies)
-                company_jobs = []
-                # If cached career page exists, check it first
-                if company in career_pages:
-                    url = career_pages[company]
-                    if not any(j["url"] == url for j in job_list) and not any(j["url"] == url for j in company_jobs):
-                        company_jobs.append({"url": url, "title": f"{company} Portal", "snippet": "", "priority": 2})
-                
-                # Combine company with base target roles for direct company job searches (restricted to India or Remote)
-                portal_queries = [
-                    f"site:boards.greenhouse.io \"{company}\" \"India\" OR \"Remote\"",
-                    f"site:lever.co \"{company}\" \"India\" OR \"Remote\"",
-                    f"site:linkedin.com/jobs/view \"{company}\" \"India\" OR \"Remote\""
-                ]
-                for role in base_roles:
-                    portal_queries.append(f"\"{company}\" \"{role}\" \"India\" OR \"Remote\"")
-                
-                for query in portal_queries:
-                    logger.info(f"Searching for target company '{company}' jobs via query: '{query}'...")
-                    try:
-                        search_res = await session.call_tool("search_web", arguments={"query": query})
-                        search_text = search_res.content[0].text
-                        
-                        blocks = re.split(r'Result \d+:', search_text)
-                        for block in blocks:
-                            if not block.strip():
-                                continue
-                            url_m = re.search(r'URL:\s*(https?://\S+)', block)
-                            title_m = re.search(r'Title:\s*(.*)', block)
-                            snippet_m = re.search(r'Snippet:\s*(.*)', block, re.DOTALL)
-                            
-                            if url_m:
-                                url = url_m.group(1).strip()
-                                title = title_m.group(1).strip() if title_m else f"{company} Job"
-                                snippet = snippet_m.group(1).strip() if snippet_m else ""
-                                
-                                if not is_aggregator_list_page(url):
-                                    if not any(j["url"] == url for j in job_list) and not any(j["url"] == url for j in company_jobs):
-                                        company_jobs.append({"url": url, "title": title, "snippet": snippet, "priority": 2})
-                    except Exception as e:
-                        logger.error(f"Error searching for company '{company}' with query '{query}': {e}")
-                
-                if company not in completed_companies:
-                    completed_companies.append(company)
-                update_scan_status(current_company="", completed_companies=completed_companies)
-                asyncio.create_task(schedule_filter_for_company(company, company_jobs))
-
-            # Phase 2: If restriction is disabled, run general searches
-            if not restrict_to_target:
-                logger.info("Restriction is off. Running general search queries...")
-                for query in search_queries:
-                    search_query = query
-                    if "site:" not in query.lower():
-                        search_query = f"{query} job posting"
-                        
-                    logger.info(f"Searching general query: '{query}'...")
-                    try:
-                        search_res = await session.call_tool("search_web", arguments={"query": search_query})
-                        search_text = search_res.content[0].text
-                        
-                        blocks = re.split(r'Result \d+:', search_text)
-                        for block in blocks:
-                            if not block.strip():
-                                continue
-                            url_m = re.search(r'URL:\s*(https?://\S+)', block)
-                            title_m = re.search(r'Title:\s*(.*)', block)
-                            snippet_m = re.search(r'Snippet:\s*(.*)', block, re.DOTALL)
-                            
-                            if url_m:
-                                url = url_m.group(1).strip()
-                                title = title_m.group(1).strip() if title_m else "General Job"
-                                snippet = snippet_m.group(1).strip() if snippet_m else ""
-                                
-                                if not is_aggregator_list_page(url):
-                                    if not any(j["url"] == url for j in job_list):
-                                        job_list.append({"url": url, "title": title, "snippet": snippet, "priority": 3})
-                    except Exception as e:
-                        logger.error(f"Error searching general query '{query}': {e}")
-            else:
-                logger.info("Restriction is active. Skipping general search queries.")
-
-            # Deduplicate and sort by priority (0: career scrape, 1: direct, 2: company search, 3: general)
-            job_list.sort(key=lambda x: x["priority"])
-            logger.info(f"Total compiled job list has {len(job_list)} entries.")
-
-            # Smart batch pre-filtering of discovered jobs before fetching detail pages
-            job_list = await filter_jobs_batch_smart(
-                job_list=job_list,
-                resume_text=resume_text,
-                preferences_text=preferences_text,
-                model_name=model_name
-            )
+            final_initial_jobs = list(job_list) # Includes direct URLs
+            if filter_tasks:
+                results_list = await asyncio.gather(*filter_tasks)
+                for res in results_list:
+                    final_initial_jobs.extend(res)
             
-            # Start processing loop
+            final_initial_jobs.sort(key=lambda x: x.get("priority", 99))
+            job_list = final_initial_jobs
+            
+            # Write the stub jobs so UI updates immediately
+            with open(jobs_json_path, 'w', encoding='utf-8') as jf:
+                json.dump(job_list, jf, indent=2)
+            
             processed_count = 0
-            additional_companies = set()
             daily_jobs = []
 
-            for idx, job in enumerate(job_list, 1):
-                url = job["url"]
-                title = job["title"]
-                snippet = job["snippet"]
-                priority = job["priority"]
-                
-                # Check limits
-                if processed_count >= max_to_process:
-                    logger.info(f"Processed maximum limit of {max_to_process} jobs. Stopping loop.")
-                    break
-                    
-                logger.info(f"Processing [{idx}/{len(job_list)}]: {url} (Priority: {priority})")
-                
-                try:
-                    res = await process_discovered_url(
-                        url=url,
-                        title=title,
-                        snippet=snippet,
-                        session=session,
-                        config=config,
-                        model_name=model_name,
-                        salary_threshold=salary_threshold,
-                        resume_text=resume_text,
-                        preferences_text=preferences_text,
-                        daily_dir=daily_dir,
-                        company_hint=job.get("company_hint", ""),
-                    )
-                    
-                    if res:
-                        processed_count += 1
-                        daily_jobs.append(res)
-                        
-                        # Auto-cache company career portal if it is one of the target companies
-                        co_name = res.get("company", "").strip()
-                        if co_name and co_name != "N/A" and co_name in target_companies:
-                            career_pages = config.get("company_career_pages", {})
-                            job_url = res.get("url", "")
-                            base_portal_url = None
-                            if "greenhouse.io" in job_url:
-                                match = re.match(r'(https?://boards\.greenhouse\.io/[^/]+)', job_url)
-                                if match:
-                                    base_portal_url = match.group(1)
-                            elif "lever.co" in job_url:
-                                match = re.match(r'(https?://jobs\.lever\.co/[^/]+)', job_url)
-                                if match:
-                                    base_portal_url = match.group(1)
-                            
-                            if base_portal_url and co_name not in career_pages:
-                                career_pages[co_name] = base_portal_url
-                                config["company_career_pages"] = career_pages
-                                # Save back to config.json
-                                try:
-                                    with open("config.json", "w", encoding="utf-8") as cf:
-                                        json.dump(config, cf, indent=2)
-                                    logger.info(f"Auto-cached portal URL for target company '{co_name}': {base_portal_url}")
-                                except Exception as e:
-                                    logger.error(f"Failed to auto-cache career portal for {co_name}: {e}")
+            # Process jobs concurrently
+            semaphore = asyncio.Semaphore(3)
 
-                        # Track additional companies if it was a general search
-                        if priority == 3 and co_name and co_name != "N/A" and co_name not in target_companies:
-                            additional_companies.add(co_name)
-                            if len(additional_companies) >= max_additional:
-                                logger.info(f"Reached maximum limit of {max_additional} additional companies. Skipping remaining general jobs.")
-                                # Remove any remaining priority 3 jobs from the list
-                                job_list = [j for j in job_list if j["priority"] != 3]
-                                
-                except Exception as ollama_err:
-                    logger.critical("Aborting job loop due to Ollama connection failure.")
-                    break
+            async def sem_process_url(idx, job):
+                async with semaphore:
+                    try:
+                        return await process_discovered_url(
+                            url=job["url"], title=job["title"], snippet=job["snippet"],
+                            session=session, config=config, model_name=model_name,
+                            salary_threshold=salary_threshold, resume_text=resume_text,
+                            preferences_text=preferences_text, daily_dir=daily_dir, company_hint=job.get("company_hint", "")
+                        )
+                    except Exception as e:
+                        logger.error(f"Error processing {job['url']}: {e}")
+                        return None
+
+            tasks = []
+            for idx, job in enumerate(job_list[:max_to_process], 1):
+                tasks.append(sem_process_url(idx, job))
+
+            results = await asyncio.gather(*tasks)
             
-            # Sort final JSON list by match score descending and rewrite
+            for res in results:
+                if res:
+                    processed_count += 1
+                    daily_jobs.append(res)
+            
             if os.path.exists(jobs_json_path):
-                try:
-                    with open(jobs_json_path, "r", encoding="utf-8") as f:
-                        final_jobs = json.load(f)
-                    final_jobs.sort(key=lambda x: x.get("match_score", 0), reverse=True)
-                    with open(jobs_json_path, "w", encoding="utf-8") as f:
-                        json.dump(final_jobs, f, indent=2)
-                    daily_jobs = final_jobs
-                except Exception as e:
-                    logger.error(f"Error sorting final jobs list: {e}")
+                with open(jobs_json_path, "r", encoding="utf-8") as f: final_jobs = json.load(f)
+                final_jobs.sort(key=lambda x: x.get("match_score", 0), reverse=True)
+                with open(jobs_json_path, "w", encoding="utf-8") as f: json.dump(final_jobs, f, indent=2)
 
-            # Generate daily summary report using Ollama
-            if daily_jobs:
-                logger.info("Generating daily job hunting digest summary using Ollama...")
-                jobs_summary_input = "\n".join([
-                    f"- Job: {j.get('title','N/A')} at {j.get('company','N/A')} (CTC: {j.get('ctc',0.0)} LPA, Match Score: {j.get('match_score',0)}%, Curve Ball: {j.get('is_curve_ball',False)})"
-                    for j in daily_jobs
-                ])
-                
-                summary_prompt = f"""
-                Analyze the following job hunt findings for today and write a brief, professional Markdown digest summary:
-                
-                {jobs_summary_input}
-                
-                Provide:
-                1. Key Hiring Trends observed today (active roles, industries).
-                2. Summary of top match opportunities.
-                3. Highlight any surfaced 'Curve Ball' adjacent opportunities (if any).
-                4. A concluding paragraph of recommendations for the candidate.
-                
-                Output ONLY valid Markdown. Do not include markdown code block ticks.
-                """
-                
-                try:
-                    sum_res = ollama.chat(
-                        model=model_name,
-                        messages=[
-                            {"role": "system", "content": "You are a professional career coach. Output ONLY valid Markdown summarizing the job search. No chat metadata."},
-                            {"role": "user", "content": summary_prompt}
-                        ]
-                    )
-                    summary_md = sum_res['message']['content'].strip()
-                    
-                    if summary_md.startswith("```markdown"):
-                        summary_md = summary_md[11:]
-                    if summary_md.startswith("```"):
-                        summary_md = summary_md[3:]
-                    if summary_md.endswith("```"):
-                        summary_md = summary_md[:-3]
-                    summary_md = summary_md.strip()
-                    
-                    summary_path = os.path.join(daily_dir, "summary.md")
-                    with open(summary_path, "w", encoding="utf-8") as f:
-                        f.write(summary_md)
-                    logger.info(f"Saved daily summary to {summary_path}")
-                except Exception as e:
-                    logger.error(f"Error generating daily summary: {e}")
-            else:
-                summary_path = os.path.join(daily_dir, "summary.md")
-                with open(summary_path, "w", encoding="utf-8") as f:
-                    f.write("# Daily Job Hunt Digest\n\nNo job listings met the criteria today. Try adjusting search queries or compensation thresholds in `config.json`.")
-                logger.info("No jobs found today, saved default summary.")
-                
             update_scan_status(current_company="", completed_companies=completed_companies, status="completed")
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ class JobDetails(BaseModel):
     posted_date: Optional[str] = Field(None, description="The date the job was posted, if explicitly stated or inferred from text, e.g. '2026-05-10', '3 days ago', 'October 2025', or 'Unknown'.")
 
 class SalaryEstimation(BaseModel):
-    estimated_lpa: float = Field(description="The estimated average/median annual salary package in Lakhs Per Annum (LPA) in India. If US/Remote in USD, convert to LPA (assume 1 USD = 83 INR, so $100k = 83 LPA). If not found, return 0.0.")
+    estimated_salary: float = Field(description="The estimated average/median annual salary. If not found, return 0.0.")
     reason: str = Field(description="Brief reason or source snippet for the estimation")
 
 class JobMatchEvaluation(BaseModel):
@@ -31,7 +31,7 @@ class JobMatchEvaluation(BaseModel):
     reason: str = Field(description="A brief 1-2 sentence explanation of the rating.")
 
 # Import salary parsing utility from job_agent
-from job_agent import parse_salary_to_lpa
+from job_agent import parse_salary_to_target_currency
 
 # ==========================================
 # MOCK WEB DATA
@@ -64,10 +64,10 @@ def test_pipeline():
         config = json.load(f)
         
     model_name = config.get("ollama_model", "llama3.2:latest")
-    salary_threshold = config.get("target_compensation_threshold_lpa", 0)
-    digest_path = "jobs_digest_test.md"
+    salary_threshold = config.get("target_compensation_threshold", 0)
     
-    logger.info(f"Test Configuration: Model={model_name}, Threshold={salary_threshold} LPA")
+    logger.info("=" * 60)
+    logger.info(f"Test Configuration: Model={model_name}, Threshold={salary_threshold}")
     
     # 2. Read resume
     resume_text = ""
@@ -125,14 +125,14 @@ def test_pipeline():
     logger.info("Step 2: Checking compensation threshold...")
     estimated_pay = 0.0
     if job_metrics.explicit_salary:
-        estimated_pay = parse_salary_to_lpa(job_metrics.explicit_salary)
-    logger.info(f"Calculated pay: ~{estimated_pay} LPA")
+        estimated_pay = parse_salary_to_target_currency(job_metrics.explicit_salary, config.get('currency', 'USD'))
+    logger.info(f"Calculated pay: ~{estimated_pay} {config.get('currency', 'USD')}")
     
-    if estimated_pay < salary_threshold:
-        logger.warning(f"Gated: estimated pay {estimated_pay} LPA is below threshold {salary_threshold} LPA.")
-        return
-    else:
-        logger.info(f"Passed Gatekeeper check! {estimated_pay} LPA >= {salary_threshold} LPA.")
+    if estimated_pay > 0 and estimated_pay < salary_threshold:
+        logger.warning(f"Gated: estimated pay {estimated_pay} is below threshold {salary_threshold}.")
+        return None
+    elif estimated_pay > 0:
+        logger.info(f"Passed Gatekeeper check! {estimated_pay} >= {salary_threshold}.")
         
     # 5. Score candidate resume alignment
     logger.info("Step 3: Evaluating resume alignment using Ollama...")
@@ -170,7 +170,7 @@ def test_pipeline():
         with open(digest_path, "w", encoding="utf-8") as f:
             f.write("# Job Hunting Daily Digest (TEST)\n\n")
             f.write(f"## [{job_metrics.title} - {job_metrics.company}](https://example.com/mock-post)\n")
-            f.write(f"- **Estimated Salary:** {estimated_pay} LPA\n")
+            f.write(f"- **Estimated Salary:** {estimated_pay} {config.get('currency', 'USD')}\n")
             f.write(f"- **Profile Match Score:** {match_data.score}%\n")
             f.write(f"- **Reasoning:** {match_data.reason}\n")
             f.write(f"- **Required Skills:** {', '.join(job_metrics.required_skills)}\n")
