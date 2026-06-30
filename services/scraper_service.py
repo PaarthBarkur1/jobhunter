@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import random
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, Page, Response
 from typing import List, Dict, Any
@@ -71,6 +72,8 @@ class ScraperService:
         result = {"url": url, "api_data": [], "dom_links": []}
         
         try:
+            # Fix 5: The IP Ban Risk (Introduce random jitter)
+            await asyncio.sleep(random.uniform(1.0, 3.5))
             await page.goto(url, wait_until="networkidle", timeout=30000)
             
             if api_results:
@@ -98,6 +101,8 @@ class ScraperService:
         text_content = ""
         
         try:
+            # Fix 5: The IP Ban Risk (Introduce random jitter)
+            await asyncio.sleep(random.uniform(1.0, 3.5))
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             content = await page.content()
             soup = BeautifulSoup(content, 'html.parser')

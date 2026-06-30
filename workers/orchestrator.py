@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import aiohttp
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -8,8 +9,10 @@ from core.models import ScanLog, JobPosting, Company
 from services.scraper_service import ScraperService
 from services.llm_service import LLMService
 from services.evaluator_service import EvaluatorService
+from career_pages import get_career_config, CAREER_PAGE_REGISTRY
 
 from sqlalchemy import select
+from sqlalchemy.dialects.sqlite import insert
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,39 @@ class Orchestrator:
             self.resume_text = "Experienced Software Engineer" # Fallback if missing
             
     async def _get_target_companies(self, session) -> List[Company]:
+        # First, sync companies from the config into the database
+        target_names = self.preferences.get("target_companies", [])
+        career_pages = self.preferences.get("company_career_pages", {})
+        
+        # Reset all current is_target flags to false to mirror config exact state
+        stmt = select(Company)
+        result = await session.execute(stmt)
+        for c in result.scalars().all():
+            c.is_target = False
+            
+        # Add or update targets based on config
+        for name in target_names:
+            stmt = select(Company).where(Company.name == name)
+            existing = await session.execute(stmt)
+            company = existing.scalar_one_or_none()
+            
+            # Fix 1: The Configuration Mapping Gap
+            career_cfg = get_career_config(name)
+            ats_provider = career_cfg.portal_type if career_cfg else None
+            ats_slug = career_cfg.ats_slug if career_cfg else None
+            url = career_pages.get(name) or (career_cfg.regional_url if career_cfg else None) or (career_cfg.career_url if career_cfg else None)
+            
+            if not company:
+                company = Company(name=name, career_url=url, ats_provider=ats_provider, ats_slug=ats_slug, is_target=True)
+                session.add(company)
+            else:
+                company.is_target = True
+                company.career_url = url or company.career_url
+                company.ats_provider = ats_provider or company.ats_provider
+                company.ats_slug = ats_slug or company.ats_slug
+                
+        await session.commit()
+        
         stmt = select(Company).where(Company.is_target == True)
         result = await session.execute(stmt)
         return list(result.scalars().all())
@@ -55,6 +91,33 @@ class Orchestrator:
                 companies = await self._get_target_companies(session)
                 if not companies:
                     logger.warning("No target companies found in the database. Please add targets before running.")
+                    
+                # Fix 3: Stale Job Accumulation
+                try:
+                    logger.info("Verifying stale jobs...")
+                    stmt = select(JobPosting).where(JobPosting.status == 'unrated')
+                    unrated_jobs = (await session.execute(stmt)).scalars().all()
+                    
+                    async def ping_url(job: JobPosting):
+                        try:
+                            async with aiohttp.ClientSession() as http_session:
+                                async with http_session.get(job.url, timeout=10) as response:
+                                    if response.status == 404:
+                                        return job
+                        except Exception:
+                            pass
+                        return None
+                            
+                    ping_tasks = [ping_url(j) for j in unrated_jobs]
+                    if ping_tasks:
+                        dead_jobs = await asyncio.gather(*ping_tasks)
+                        dead_jobs = [j for j in dead_jobs if j is not None]
+                        for dj in dead_jobs:
+                            dj.status = 'closed'
+                        await session.commit()
+                        logger.info(f"Pruned {len(dead_jobs)} stale jobs.")
+                except Exception as e:
+                    logger.error(f"Error verifying stale jobs: {e}")
                     
                 # Step B: Discovery (Concurrency: 5 via Semaphore)
                 semaphore = asyncio.Semaphore(5)
@@ -103,10 +166,10 @@ class Orchestrator:
                             user_resume=self.resume_text
                         )
                         
-                        # Step E: Persistence
-                        job_posting = JobPosting(
+                        # Step E: Persistence (Fix 2: The Unique Constraint Race Condition)
+                        stmt = insert(JobPosting).values(
                             url=url,
-                            title="Discovered Job Role", # Extracted from API natively, or LLM fallback
+                            title="Discovered Job Role",
                             company_id=company.id,
                             raw_description=raw_text,
                             match_score=eval_result.get("match_score", 0),
@@ -116,7 +179,8 @@ class Orchestrator:
                             curve_ball_reason=eval_result.get("curve_ball_reason"),
                             status="unrated"
                         )
-                        session.add(job_posting)
+                        stmt = stmt.on_conflict_do_nothing(index_elements=['url'])
+                        await session.execute(stmt)
                         await session.commit()
                         scan_log.jobs_discovered += 1
                         

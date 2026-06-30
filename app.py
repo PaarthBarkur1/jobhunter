@@ -1,6 +1,16 @@
 import os
 import json
+import sys
 import asyncio
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    try:
+        from uvicorn.loops import asyncio as uvicorn_asyncio
+        uvicorn_asyncio.asyncio_setup = lambda: None
+    except ImportError:
+        pass
+
 import logging
 import subprocess
 from fastapi import FastAPI, BackgroundTasks, HTTPException
@@ -29,6 +39,12 @@ scheduler_process = None
 ollama_process = None
 scan_lock = asyncio.Lock()
 scheduler_lock = asyncio.Lock()
+preferences_lock = asyncio.Lock()
+
+async def safe_update_preferences(*args, **kwargs):
+    async with preferences_lock:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: update_preferences_profile(*args, **kwargs))
 
 import socket
 
@@ -330,15 +346,15 @@ async def submit_feedback(req: FeedbackRequest, background_tasks: BackgroundTask
                 except Exception as e:
                     logger.error(f"Failed to save config.json on company promotion: {e}")
 
-        # Enqueue background task
+        # Fix 4: File I/O Race Conditions on preferences.md (Use safe wrapper)
         background_tasks.add_task(
-            update_preferences_profile,
-            job_title=job_found.title,
-            company=co_name,
-            status=req.status,
-            comment=req.comment,
-            preferences_path=config.get("preferences_path", ".resumes/preferences.md"),
-            model_name=model_name
+            safe_update_preferences,
+            job_found.title,
+            co_name,
+            req.status,
+            req.comment,
+            config.get("preferences_path", ".resumes/preferences.md"),
+            model_name
         )
         
     return {"status": "success", "message": "Feedback recorded, preference profile update scheduled."}
