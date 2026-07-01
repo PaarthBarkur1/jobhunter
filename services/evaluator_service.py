@@ -12,6 +12,10 @@ class EvaluatorService:
         self.evaluation_schema = {
             "type": "object",
             "properties": {
+                "job_title": {
+                    "type": "string",
+                    "description": "The exact job title extracted from the job description."
+                },
                 "match_score": {
                     "type": "integer",
                     "description": "Score from 0 to 100 indicating how well the resume matches the job description."
@@ -34,16 +38,16 @@ class EvaluatorService:
                     "description": "Explanation of the curve ball requirement, if any."
                 }
             },
-            "required": ["match_score", "match_reason", "required_skills", "is_curve_ball"]
+            "required": ["job_title", "match_score", "match_reason", "required_skills", "is_curve_ball"]
         }
 
-    async def evaluate_job(self, job_text: str, user_resume: str) -> Dict[str, Any]:
+    async def evaluate_job(self, job_text: str, user_resume: str, company_name: str) -> Dict[str, Any]:
         """
         Accepts raw, cleaned job text and the user's resume.
         Calls llm_service to generate a semantic match score, extract skills, and determine alignment.
         """
         prompt = f"""
-You are an expert technical recruiter evaluating a candidate's fit for a role.
+You are an expert technical recruiter analyzing a job description for {company_name}.
 Evaluate the following Job Description against the Candidate's Resume.
 
 Candidate Resume:
@@ -64,6 +68,7 @@ Analyze the job description carefully and output a JSON response matching the re
         except Exception as e:
             logger.error(f"Error during job evaluation: {e}")
             return {
+                "job_title": "Discovered Job Role",
                 "match_score": 0,
                 "match_reason": f"Evaluation failed: {str(e)}",
                 "required_skills": [],

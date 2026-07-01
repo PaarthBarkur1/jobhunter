@@ -27,23 +27,53 @@ class ScraperService:
             await self.playwright.stop()
         logger.info("Playwright cleanup complete.")
 
-    async def fetch_urls_from_page(self, page: Page, base_url: str) -> List[str]:
+    async def fetch_urls_from_page(self, page: Page, base_url: str) -> List[Dict[str, str]]:
         """
         Fallback method using BeautifulSoup to extract /job/ links from DOM.
         Does NOT use LLMs to find links.
         """
+        import urllib.parse
         content = await page.content()
         soup = BeautifulSoup(content, 'html.parser')
-        job_links = set()
+        job_links = {}
         
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href']
-            if '/job/' in href.lower() or '/careers/' in href.lower() or '/openings/' in href.lower():
-                if href.startswith('/'):
-                    href = base_url.rstrip('/') + href
-                job_links.add(href)
+            title = a_tag.get_text(strip=True)
+            
+            # Fix 3: Broken SPA URLs
+            abs_url = urllib.parse.urljoin(base_url, href)
+            abs_lower = abs_url.lower()
+            
+            # Filter out generic base URLs
+            if abs_url.rstrip('/') == base_url.rstrip('/') or href in ['/', '#']:
+                continue
                 
-        return list(job_links)
+            # Filter out obvious non-job links
+            if any(skip in abs_lower for skip in ['/login', '/signin', '/signup', '/about', 'mailto:']):
+                continue
+                
+            is_job = False
+            
+            # 1. Contains standard job path segments or query params
+            if any(x in abs_lower for x in ['/job/', '/role/', '/opening/', '/req/', 'jobid=', 'reqid=', 'requisition']):
+                is_job = True
+            
+            # 2. Contains UUID-like pattern (e.g., Lever)
+            elif re.search(r'/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}', abs_lower):
+                is_job = True
+                
+            # 3. Path ends with a string containing digits (very common for job IDs)
+            elif re.search(r'/[a-zA-Z0-9-]*\d+[a-zA-Z0-9-]*$', urllib.parse.urlparse(abs_url).path):
+                path_segments = urllib.parse.urlparse(abs_url).path.strip('/').split('/')
+                if len(path_segments) >= 2:
+                    is_job = True
+
+            if is_job:
+                if abs_url not in job_links or not job_links[abs_url]:
+                    job_links[abs_url] = title
+                
+        return [{"url": u, "title": t} for u, t in job_links.items()]
 
     async def scrape_career_page(self, url: str) -> Dict[str, Any]:
         """
@@ -75,12 +105,18 @@ class ScraperService:
         try:
             # Fix 5: The IP Ban Risk (Introduce random jitter)
             await asyncio.sleep(random.uniform(1.0, 3.5))
-            await page.goto(url, wait_until="networkidle", timeout=30000)
+            try:
+                # Use domcontentloaded instead of networkidle to prevent 30s timeouts on analytics-heavy sites
+                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                await asyncio.sleep(3) # Let JS frameworks hydrate
+            except Exception as e:
+                logger.warning(f"Timeout reaching {url}, proceeding to extract from loaded DOM anyway: {e}")
             
             if api_results:
                 result["api_data"] = api_results
-            else:
-                result["dom_links"] = await self.fetch_urls_from_page(page, url)
+            
+            # Always fallback to extracting DOM links just in case API data is unhandled
+            result["dom_links"] = await self.fetch_urls_from_page(page, url)
                 
         except Exception as e:
             logger.error(f"Error scraping {url}: {e}")
@@ -104,9 +140,12 @@ class ScraperService:
         try:
             # Fix 5: The IP Ban Risk (Introduce random jitter)
             await asyncio.sleep(random.uniform(1.0, 3.5))
-            await page.goto(url, wait_until="networkidle", timeout=15000)
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+            except Exception as e:
+                logger.warning(f"Timeout reaching {url}, proceeding to extract from loaded DOM anyway: {e}")
             
-            # Hard Jitter for SPAs to render DOM after network idle
+            # Hard Jitter for SPAs to render DOM after domcontentloaded
             await asyncio.sleep(2)
             
             content = await page.content()

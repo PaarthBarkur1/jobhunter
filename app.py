@@ -56,7 +56,8 @@ async def lifespan(app: FastAPI):
     if not is_ollama_running():
         logger.info("Ollama server not detected. Starting 'ollama serve' in background...")
         env = os.environ.copy()
-        env["OLLAMA_KEEP_ALIVE"] = "24h"
+        # Change keep alive to 5m to prevent Ollama from locking VRAM indefinitely and timing out watchdog
+        env["OLLAMA_KEEP_ALIVE"] = "5m"
         if "CUDA_VISIBLE_DEVICES" in env and env["CUDA_VISIBLE_DEVICES"] == "":
             del env["CUDA_VISIBLE_DEVICES"]
             
@@ -102,6 +103,10 @@ class CompaniesRequest(BaseModel):
 class QueriesRequest(BaseModel):
     queries: List[str]
 
+class CareerPageRequest(BaseModel):
+    company: str
+    url: str
+
 # --- Helper Functions ---
 def load_config() -> dict:
     config_path = "config.json"
@@ -145,12 +150,14 @@ async def get_available_dates():
         return dates
 
 @app.get("/api/jobs")
-async def get_jobs_for_date(date: str):
+async def get_jobs_for_date(date: str = "all", scan_id: Optional[int] = None):
     """Retrieve jobs seamlessly joined with their Company data from SQLite."""
     async with get_db_session() as session:
         stmt = select(JobPosting).options(selectinload(JobPosting.company)).where(JobPosting.status != 'closed').order_by(desc(JobPosting.match_score))
         
-        if date != "all":
+        if scan_id:
+            stmt = stmt.where(JobPosting.scan_id == scan_id)
+        elif date != "all":
             stmt = stmt.where(func.date(JobPosting.date_discovered) == date)
             
         result = await session.execute(stmt)
@@ -225,13 +232,13 @@ async def submit_feedback(req: FeedbackRequest, background_tasks: BackgroundTask
 
     return {"status": "success", "message": "Feedback recorded."}
 
-def _run_pipeline_thread(resume_path, config):
+def _run_pipeline_thread(resume_path, config, scan_id):
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(run_pipeline(resume_path=resume_path, preferences=config))
+        loop.run_until_complete(run_pipeline(resume_path=resume_path, preferences=config, scan_id=scan_id))
     finally:
         loop.close()
 
@@ -242,9 +249,17 @@ async def trigger_scan(background_tasks: BackgroundTasks):
     config = load_config()
     resume_path = config.get("preferences_path", ".resumes/preferences.md")
     
+    # Create ScanLog synchronously to return its ID to frontend
+    async with get_db_session() as session:
+        scan_log = ScanLog(status="running", jobs_discovered=0)
+        session.add(scan_log)
+        await session.commit()
+        await session.refresh(scan_log)
+        scan_id = scan_log.id
+    
     # Run in a dedicated thread to ensure Playwright uses ProactorEventLoop on Windows
-    background_tasks.add_task(_run_pipeline_thread, resume_path, config)
-    return {"status": "started", "message": "Orchestrator pipeline started in background."}
+    background_tasks.add_task(_run_pipeline_thread, resume_path, config, scan_id)
+    return {"status": "started", "message": "Orchestrator pipeline started in background.", "scan_id": scan_id}
 
 @app.get("/api/scan/status")
 async def get_scan_status():
@@ -254,10 +269,11 @@ async def get_scan_status():
         latest_scan = await session.scalar(stmt)
         
         if not latest_scan:
-            return {"status": "idle", "completed_companies": []}
+            return {"status": "idle", "scan_id": None, "completed_companies": []}
             
         return {
             "status": latest_scan.status,
+            "scan_id": latest_scan.id,
             "jobs_discovered": latest_scan.jobs_discovered,
             "error_message": latest_scan.error_message,
             "completed_companies": [] # Can be implemented via relationships if needed later
@@ -287,6 +303,54 @@ async def get_app_config():
 async def get_active_companies():
     return load_config().get("target_companies", [])
 
+@app.post("/api/companies")
+async def save_companies(req: CompaniesRequest):
+    config = load_config()
+    config["target_companies"] = req.companies
+    with open("config.json", "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+    return {"status": "success", "companies": config["target_companies"]}
+
+@app.post("/api/career-pages")
+async def add_career_page(req: CareerPageRequest):
+    # Update master database
+    db_path = "data/companies_db.json"
+    master_db = []
+    if os.path.exists(db_path):
+        with open(db_path, "r", encoding="utf-8") as f:
+            master_db = json.load(f)
+            
+    # Check if company exists in master DB
+    found = False
+    for c in master_db:
+        if c.get("name", "").lower() == req.company.lower():
+            c["url"] = req.url
+            c["name"] = req.company # normalize case
+            found = True
+            break
+            
+    if not found:
+        master_db.append({"name": req.company, "url": req.url})
+        
+    with open(db_path, "w", encoding="utf-8") as f:
+        json.dump(master_db, f, indent=2)
+        
+    # Update config.json targets
+    config = load_config()
+    if "company_career_pages" not in config:
+        config["company_career_pages"] = {}
+    config["company_career_pages"][req.company] = req.url
+    
+    if "target_companies" not in config:
+        config["target_companies"] = []
+    if req.company not in config["target_companies"]:
+        config["target_companies"].append(req.company)
+        
+    with open("config.json", "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+        
+    return {"status": "success"}
+
 @app.get("/api/master_companies")
 async def get_master_companies():
     if os.path.exists("data/companies_db.json"):
@@ -296,4 +360,10 @@ async def get_master_companies():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run(
+        "app:app", 
+        host="127.0.0.1", 
+        port=8000, 
+        reload=True, 
+        reload_excludes=[".venv"]
+    )

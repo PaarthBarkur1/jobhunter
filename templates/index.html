@@ -15,25 +15,25 @@
     
     <style>
         :root {
-            --bg-gradient: linear-gradient(135deg, #0f0c20 0%, #15102a 50%, #06020f 100%);
-            --glass-bg: rgba(255, 255, 255, 0.03);
-            --glass-border: rgba(255, 255, 255, 0.06);
-            --glass-highlight: rgba(255, 255, 255, 0.1);
+            --bg-gradient: #f9fafb; /* Light clean background */
+            --glass-bg: #ffffff; /* Solid white panels */
+            --glass-border: #e5e7eb; /* Soft gray border */
+            --glass-highlight: #f3f4f6; /* Subtle hover state */
             
-            --primary: #8b5cf6;
-            --primary-glow: rgba(139, 92, 246, 0.4);
-            --secondary: #ec4899;
-            --secondary-glow: rgba(236, 72, 153, 0.4);
+            --primary: #111827; /* Bold black for primary Hinge style */
+            --primary-glow: rgba(17, 24, 39, 0.1);
+            --secondary: #8b5cf6; /* Soft purple accent */
+            --secondary-glow: rgba(139, 92, 246, 0.2);
             --success: #10b981;
             --warning: #f59e0b;
             --danger: #ef4444;
             
-            --text-main: #f3f4f6;
-            --text-muted: #9ca3af;
-            --text-dark: #6b7280;
+            --text-main: #111827; /* Crisp dark text */
+            --text-muted: #6b7280; /* Secondary gray text */
+            --text-dark: #4b5563;
             
             --font-family: 'Plus Jakarta Sans', sans-serif;
-            --transition-speed: 0.3s;
+            --transition-speed: 0.2s;
         }
 
         * {
@@ -76,16 +76,14 @@
             height: 100vh;
         }
 
-        /* --- Sidebar --- */
         aside {
-            background: rgba(10, 8, 20, 0.6);
+            background: #ffffff;
             border-right: 1px solid var(--glass-border);
             padding: 24px;
             display: flex;
             flex-direction: column;
             gap: 24px;
             overflow-y: auto;
-            backdrop-filter: blur(20px);
         }
 
         .brand {
@@ -138,7 +136,7 @@
         }
 
         select option {
-            background-color: #110d24;
+            background-color: #ffffff;
             color: var(--text-main);
         }
 
@@ -156,7 +154,7 @@
             background: var(--primary);
             color: white;
             border: none;
-            border-radius: 12px;
+            border-radius: 9999px; /* Pill shape for Hinge vibe */
             font-weight: 600;
             font-size: 0.9rem;
             cursor: pointer;
@@ -256,7 +254,7 @@
             justify-content: space-between;
             align-items: center;
             border-bottom: 1px solid var(--glass-border);
-            backdrop-filter: blur(10px);
+            background: #ffffff;
         }
 
         .header-title h1 {
@@ -271,13 +269,12 @@
             margin-top: 4px;
         }
 
-        /* --- Dashboard Trends --- */
         .trends-container {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 16px;
             padding: 24px;
-            background: rgba(0, 0, 0, 0.1);
+            background: #f9fafb;
         }
 
         .trend-card {
@@ -288,7 +285,7 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            backdrop-filter: blur(10px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.02);
             transition: transform var(--transition-speed);
         }
 
@@ -350,10 +347,10 @@
             display: flex;
             flex-direction: column;
             overflow: hidden;
-            background: var(--glass-bg);
+            background: #ffffff;
             border: 1px solid var(--glass-border);
             border-radius: 24px;
-            backdrop-filter: blur(16px);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.03);
         }
 
         .pane-header {
@@ -387,19 +384,20 @@
 
         /* --- Job Cards --- */
         .job-card {
-            background: rgba(255, 255, 255, 0.01);
-            border: 1px solid rgba(255, 255, 255, 0.04);
+            background: #ffffff;
+            border: 1px solid var(--glass-border);
             border-radius: 16px;
             padding: 16px;
             display: flex;
             flex-direction: column;
             gap: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.02);
             transition: all var(--transition-speed);
         }
 
         .job-card:hover {
-            border-color: rgba(139, 92, 246, 0.2);
-            background: rgba(255, 255, 255, 0.02);
+            border-color: var(--primary);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.06);
             transform: scale(1.01);
         }
 
@@ -411,8 +409,8 @@
 
         .job-title-group h3 {
             font-size: 1.05rem;
-            font-weight: 600;
-            color: white;
+            font-weight: 700;
+            color: var(--primary);
         }
 
         .job-title-group p {
@@ -436,8 +434,8 @@
         }
 
         .badge-source {
-            background: rgba(255, 255, 255, 0.08);
-            color: var(--text-main);
+            background: #f3f4f6;
+            color: var(--text-dark);
         }
 
         .badge-curve {
@@ -492,7 +490,7 @@
             width: 120px;
             height: 6px;
             border-radius: 3px;
-            background: rgba(255, 255, 255, 0.05);
+            background: #e5e7eb;
             overflow: hidden;
             display: flex;
             align-items: center;
@@ -560,7 +558,8 @@
             font-family: 'Outfit', sans-serif;
             margin-top: 18px;
             margin-bottom: 8px;
-            color: white;
+            color: var(--primary);
+            font-weight: 700;
         }
 
         .markdown-body h1 { font-size: 1.4rem; border-bottom: 1px solid var(--glass-border); padding-bottom: 6px; }
@@ -571,8 +570,8 @@
         .markdown-body ul { padding-left: 20px; margin-bottom: 12px; color: var(--text-muted); }
         .markdown-body li { margin-bottom: 4px; }
         .markdown-body blockquote {
-            background: rgba(139, 92, 246, 0.05);
-            border-left: 3px solid var(--primary);
+            background: #f9fafb;
+            border-left: 3px solid var(--secondary);
             padding: 8px 16px;
             margin: 12px 0;
             border-radius: 0 8px 8px 0;
@@ -585,8 +584,8 @@
             left: 0;
             width: 100vw;
             height: 100vh;
-            background: rgba(0, 0, 0, 0.7);
-            backdrop-filter: blur(10px);
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(4px);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -602,9 +601,9 @@
         }
 
         .modal {
-            background: #110d24;
+            background: #ffffff;
             border: 1px solid var(--glass-border);
-            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
             border-radius: 24px;
             width: 480px;
             max-width: 90%;
@@ -639,13 +638,13 @@
         }
 
         .modal-close:hover {
-            color: white;
+            color: var(--primary);
         }
 
         .modal textarea {
             width: 100%;
             height: 120px;
-            background: var(--glass-bg);
+            background: #f9fafb;
             border: 1px solid var(--glass-border);
             border-radius: 12px;
             color: var(--text-main);
@@ -706,6 +705,34 @@
         }
         .switch input:checked + .slider:before {
             transform: translateX(22px);
+        }
+        
+        /* --- Segmented Control --- */
+        .segmented-control {
+            display: flex;
+            background: #f3f4f6;
+            border-radius: 9999px;
+            padding: 4px;
+            margin-bottom: 16px;
+        }
+        
+        .segmented-control button {
+            flex: 1;
+            padding: 8px 16px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all var(--transition-speed);
+        }
+        
+        .segmented-control button.active {
+            background: #ffffff;
+            color: var(--primary);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
         }
     </style>
 </head>
@@ -843,9 +870,15 @@
                 
                 <!-- Left Pane: Job List Feed -->
                 <div class="pane">
-                    <div class="pane-header">
-                        <h2><i class="fa-solid fa-briefcase"></i> Discovered Job Feed</h2>
-                        <span style="font-size: 0.8rem; color: var(--text-muted);" id="job-count-label">0 jobs found</span>
+                    <div class="pane-header" style="flex-direction: column; align-items: stretch; gap: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <h2><i class="fa-solid fa-briefcase"></i> Discovered Job Feed</h2>
+                            <span style="font-size: 0.8rem; color: var(--text-muted);" id="job-count-label">0 jobs found</span>
+                        </div>
+                        <div class="segmented-control">
+                            <button id="btn-filter-latest" class="active" onclick="setJobFilter('latest')">Latest Search</button>
+                            <button id="btn-filter-all" onclick="setJobFilter('all')">All Jobs Today</button>
+                        </div>
                     </div>
                     <div class="pane-content" id="job-list-content">
                         <div class="empty-state">
@@ -899,6 +932,8 @@
         let scanPollInterval = null;
         let targetCompanies = [];
         let targetQueries = [];
+        let currentScanId = null;
+        let activeJobFilter = 'all'; // 'latest' or 'all'
         let currentScanningCompany = "";
         let completedScanningCompanies = [];
 
@@ -982,7 +1017,11 @@
             document.getElementById("selected-date-title").textContent = `Job Hunting Digest - ${date}`;
             
             try {
-                const res = await fetch(`/api/jobs?date=${date}`);
+                let url = `/api/jobs?date=${date}`;
+                if (activeJobFilter === 'latest' && currentScanId) {
+                    url = `/api/jobs?scan_id=${currentScanId}`;
+                }
+                const res = await fetch(url);
                 const data = await res.json();
                 
                 // 1. Render Preferences Sidebar
@@ -1120,6 +1159,8 @@
                 const data = await res.json();
                 
                 if (data.status === "started" || data.status === "running") {
+                    currentScanId = data.scan_id;
+                    setJobFilter('latest'); // Auto-switch to latest scan view
                     updateStatus(true, "Scanning...", "Agent is searching target portals");
                     pollScanStatus();
                 } else {
@@ -1172,6 +1213,9 @@
                 const res = await fetch("/api/scan/status");
                 const data = await res.json();
                 
+                if (data.scan_id) {
+                    currentScanId = data.scan_id;
+                }
                 currentScanningCompany = data.current_company || "";
                 completedScanningCompanies = data.completed_companies || [];
                 renderCompanies();
@@ -1248,6 +1292,19 @@
             }
             textEl.textContent = text;
             subtextEl.textContent = subtext;
+        }
+
+        // Segmented Control Logic
+        function setJobFilter(filter) {
+            activeJobFilter = filter;
+            document.getElementById("btn-filter-latest").className = filter === 'latest' ? 'active' : '';
+            document.getElementById("btn-filter-all").className = filter === 'all' ? 'active' : '';
+            
+            // Reload the current date to apply the filter
+            const select = document.getElementById("date-select");
+            if (select.value) {
+                loadDateData(select.value);
+            }
         }
 
         // Thumbs Up / Down rating API

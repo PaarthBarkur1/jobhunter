@@ -71,7 +71,7 @@ class Orchestrator:
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
-    async def run_agent_pipeline(self):
+    async def run_agent_pipeline(self, scan_id: int):
         """
         Main execution workflow (DAG) for the multi-agent system.
         Strictly delegates to specialized services.
@@ -81,11 +81,11 @@ class Orchestrator:
         await self.llm_service.start()
         
         async with get_db_session() as session:
-            # Create a new ScanLog entry
-            scan_log = ScanLog(status="running", jobs_discovered=0)
-            session.add(scan_log)
-            await session.commit()
-            await session.refresh(scan_log)
+            # Fetch the existing scan log created by app.py
+            scan_log = await session.get(ScanLog, scan_id)
+            if not scan_log:
+                logger.error(f"ScanLog with ID {scan_id} not found!")
+                return
             
             try:
                 companies = await self._get_target_companies(session)
@@ -132,8 +132,14 @@ class Orchestrator:
                             result = await self.scraper_service.scrape_career_page(company.career_url)
                             # Handle fallback links or api scraped links
                             links = result.get("dom_links", [])
-                            for link in links:
-                                all_found_links.append((company, link))
+                            for link_obj in links:
+                                if isinstance(link_obj, dict):
+                                    link_url = link_obj.get("url")
+                                    link_title = link_obj.get("title", "")
+                                else:
+                                    link_url = link_obj
+                                    link_title = ""
+                                all_found_links.append((company, link_url, link_title))
                         except Exception as e:
                             logger.error(f"Error discovering links for {company.name}: {e}")
 
@@ -143,16 +149,16 @@ class Orchestrator:
                 
                 # Step C: Database Deduplication
                 new_urls_to_process = []
-                for company, link in all_found_links:
-                    stmt = select(JobPosting).where(JobPosting.url == link)
+                for company, link_url, link_title in all_found_links:
+                    stmt = select(JobPosting).where(JobPosting.url == link_url)
                     existing = await session.execute(stmt)
                     if not existing.scalar_one_or_none():
-                        new_urls_to_process.append((company, link))
+                        new_urls_to_process.append((company, link_url, link_title))
                         
                 logger.info(f"Found {len(new_urls_to_process)} new job URLs out of {len(all_found_links)} total.")
                 
                 # Step D: Extraction & Evaluation
-                for company, url in new_urls_to_process:
+                for company, url, scraped_title in new_urls_to_process:
                     try:
                         # Fetch raw description
                         raw_text = await self.scraper_service.extract_job_description(url)
@@ -163,14 +169,21 @@ class Orchestrator:
                         # Evaluate against resume
                         eval_result = await self.evaluator_service.evaluate_job(
                             job_text=raw_text, 
-                            user_resume=self.resume_text
+                            user_resume=self.resume_text,
+                            company_name=company.name
                         )
+                        
+                        # Fix 2: Hardcoded Job Titles
+                        final_title = eval_result.get("job_title") or scraped_title or "Discovered Job Role"
+                        if len(final_title) > 200:
+                            final_title = final_title[:197] + "..."
                         
                         # Step E: Persistence (Fix 2: The Unique Constraint Race Condition)
                         stmt = insert(JobPosting).values(
                             url=url,
-                            title="Discovered Job Role",
+                            title=final_title,
                             company_id=company.id,
+                            scan_id=scan_id,
                             raw_description=raw_text,
                             match_score=eval_result.get("match_score", 0),
                             match_reason=eval_result.get("match_reason"),
@@ -205,6 +218,6 @@ class Orchestrator:
                 await self.llm_service.stop()
 
 # Helper function to expose the run method easily for cron jobs / CLI
-async def run_pipeline(resume_path: str, preferences: Dict[str, Any]):
+async def run_pipeline(resume_path: str, preferences: Dict[str, Any], scan_id: int):
     orchestrator = Orchestrator(resume_path, preferences)
-    await orchestrator.run_agent_pipeline()
+    await orchestrator.run_agent_pipeline(scan_id)

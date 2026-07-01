@@ -31,6 +31,8 @@ class JobPosting(Base):
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     company: Mapped["Company"] = relationship("Company", back_populates="jobs")
     
+    scan_id: Mapped[Optional[int]] = mapped_column(ForeignKey("scan_logs.id"), index=True, nullable=True)
+    
     # Compensation & Experience
     estimated_ctc: Mapped[Optional[float]] = mapped_column(Float, default=0.0)
     explicit_salary_str: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

@@ -9,13 +9,14 @@
     "Quantitative Researcher",
     "Quantitative Developer",
     "Applied Scientist",
-    "AI Engineer"
+    "AI Engineer",
+    "analyst"
   ],
   "headless": true,
   "user_data_dir": ".browser_profile",
   "preferences_path": ".resumes/preferences.md",
   "target_companies": [
-    "D. E. Shaw"
+    "Google"
   ],
   "direct_job_urls": [],
   "jobs_digest_path": "jobs_digest.md",
